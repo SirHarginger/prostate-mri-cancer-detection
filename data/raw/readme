@@ -1,0 +1,21 @@
+# Dataset
+
+This folder contains the dataset used for the prostate MRI cancer detection project.
+
+## Source
+
+Dataset: **Prostate Cancer MRI**  
+Platform: Kaggle  
+Uploader: `sshikamaru`  
+URL: https://www.kaggle.com/datasets/sshikamaru/world-wide-covid-dataset
+
+## Citation
+
+sshikamaru. (n.d.). *Prostate Cancer MRI* [Data set]. Kaggle.  
+https://www.kaggle.com/datasets/sshikamaru/world-wide-covid-dataset
+
+## Notes
+
+The Kaggle URL slug contains `world-wide-covid-dataset`, but the dataset page title and content refer to prostate MRI data.
+
+The collection includes prostate Magnetic Resonance Images obtained using endorectal and phased array surface coils at 3T. The data was generated at the National Cancer Institute, Bethesda, Maryland, USA between 2008 and 2010.
