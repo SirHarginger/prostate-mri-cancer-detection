@@ -21,6 +21,13 @@ if ! command -v nnUNetv2_train >/dev/null 2>&1; then
   exit 1
 fi
 
-cd "${PROJECT_ROOT}"
-nnUNetv2_train 501 3d_fullres 0
+# Quadro P1000 has CUDA compute capability 6.1. PyTorch itself can use it, but
+# Triton/torch.compile requires newer GPUs, so disable nnU-Net compile by default.
+export nnUNet_compile="${nnUNet_compile:-false}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+echo "nnUNet_compile=${nnUNet_compile}"
+echo "PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF}"
 
+cd "${PROJECT_ROOT}"
+python scripts/create_nnunet_dataset501_lowvram_plan.py
+nnUNetv2_train 501 3d_fullres 0 -p nnUNetPlans_lowvram
