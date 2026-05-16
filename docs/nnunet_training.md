@@ -98,7 +98,25 @@ bash scripts/train_nnunet_dataset501_fold0.sh
 This runs:
 
 ```bash
-nnUNetv2_train 501 3d_fullres 0
+nnUNetv2_train 501 3d_fullres 0 -p nnUNetPlans_lowvram
+```
+
+The helper script first creates `nnUNetPlans_lowvram.json` from the original
+plans and reduces the 3D full-resolution batch size from `2` to `1`. It also
+sets `nnUNet_compile=false` by default. This avoids `torch.compile`/Triton on
+older GPUs such as the Quadro P1000, which has CUDA compute capability 6.1.
+PyTorch CUDA can still use the GPU, but Triton requires newer hardware.
+
+If 3D still runs out of memory on a 4 GB GPU, use the 2D fallback:
+
+```bash
+bash scripts/train_nnunet_dataset501_2d_fold0.sh
+```
+
+This runs:
+
+```bash
+nnUNetv2_train 501 2d 0 -p nnUNetPlans_lowvram
 ```
 
 Do not treat the resulting model as clinically validated. This is a research
@@ -116,4 +134,15 @@ segmentation baseline for prostate ROI masks.
   `32` train images, `32` train labels, and `16` test images.
 - If CUDA/GPU errors occur during training, verify the active PyTorch
   installation, CUDA version, and `nvidia-smi` before restarting training.
+- If training crashes with a Triton or `torch.compile` message saying the GPU
+  needs CUDA capability `>= 7.0`, set `nnUNet_compile=false` before training:
 
+  ```bash
+  export nnUNet_compile=false
+  bash scripts/train_nnunet_dataset501_fold0.sh
+  ```
+
+- If training crashes later with CUDA out-of-memory, the 4 GB Quadro P1000 may
+  still be too small for `3d_fullres`. In that case, run
+  `bash scripts/train_nnunet_dataset501_2d_fold0.sh` first or use a GPU with
+  more VRAM for the 3D baseline.
