@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from prostate_detection.preprocessing.nnunet_conversion import (
     EXPECTED_NUM_TEST,
@@ -11,6 +12,11 @@ from prostate_detection.preprocessing.msd_binary_roi import require_nibabel
 
 
 DATASET_DIR = Path("data/nnunet/nnUNet_raw/Dataset501_ProstateROI_T2")
+
+pytestmark = pytest.mark.skipif(
+    not DATASET_DIR.exists(),
+    reason="Archived Dataset501 artifact is not required for the Prostate158 main pipeline.",
+)
 
 
 def test_nnunet_dataset501_folder_structure_exists() -> None:
