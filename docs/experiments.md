@@ -63,10 +63,9 @@ Known limitations:
 
 - Initial fold0 validation result only.
 - Not clinically validated.
-- Requires evaluation plots, model-card draft, and stronger validation before
-  any backend-facing inference package.
+- Requires stronger validation before any clinical or deployment claims.
 
-Next reporting command:
+Evaluation/reporting command completed:
 
 ```bash
 python scripts/classification/evaluate_picai_classifier.py \
@@ -75,3 +74,17 @@ python scripts/classification/evaluate_picai_classifier.py \
   --output-dir /home/degboh/prostate_mri_cancer_detection/reports/classifier_v1_fold0 \
   --overwrite
 ```
+
+Report outputs:
+
+```text
+/home/degboh/prostate_mri_cancer_detection/reports/classifier_v1_fold0/
+```
+
+Expected files:
+
+- `evaluation_metrics.json`
+- `roc_curve.png`
+- `precision_recall_curve.png`
+- `confusion_matrix.png`
+- `model_card_draft.md`

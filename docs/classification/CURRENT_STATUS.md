@@ -22,6 +22,7 @@ Current scripts:
 - `scripts/classification/extract_picai_case_features.py`
 - `scripts/classification/train_picai_baseline_classifier.py`
 - `scripts/classification/evaluate_picai_classifier.py`
+- `scripts/classification/audit_deep_learning_readiness.py`
 
 The baseline classifier training script exists and has completed the first
 fold0 cluster run.
@@ -151,9 +152,9 @@ Validation metrics:
 | Logistic Regression | 0.6908 | 0.4732 | 0.5882 | 0.7209 | 0.6546 | 0.5128 |
 | Random Forest | 0.5978 | 0.3549 | 0.2353 | 0.8837 | 0.5595 | 0.3077 |
 
-## Next Task
+## Evaluation and Reporting Status
 
-Run classifier evaluation/reporting on the cluster:
+Cluster command used:
 
 ```bash
 python scripts/classification/evaluate_picai_classifier.py \
@@ -163,10 +164,42 @@ python scripts/classification/evaluate_picai_classifier.py \
   --overwrite
 ```
 
-The evaluation script loads the saved fold0 classifier artifacts, recreates the
-validation split from saved schema/metrics settings, and writes ROC and PR
-curves, a confusion matrix figure, metrics JSON, and a model-card draft outside
-Git.
+Evaluation outputs were saved under:
+
+```text
+/home/degboh/prostate_mri_cancer_detection/reports/classifier_v1_fold0/
+```
+
+Expected report artifacts:
+
+- `evaluation_metrics.json`
+- `roc_curve.png`
+- `precision_recall_curve.png`
+- `confusion_matrix.png`
+- `model_card_draft.md`
+
+The evaluator reproduced the saved fold0 validation metrics:
+
+- ROC AUC: 0.6908.
+- PR AUC: 0.4732.
+- Sensitivity: 0.5882.
+- Specificity: 0.7209.
+- Balanced accuracy: 0.6546.
+- F1: 0.5128.
+
+## Next Task
+
+Run the deep-learning readiness audit on the cluster:
+
+```bash
+python scripts/classification/audit_deep_learning_readiness.py \
+  --manifest /home/degboh/prostate_mri_cancer_detection/data/features/picai_fold0_image_manifest.csv \
+  --output /home/degboh/prostate_mri_cancer_detection/outputs/deep_learning_readiness_fold0.json \
+  --limit 20
+```
+
+The audit should confirm image availability, sample geometry, and torch/MONAI/GPU
+readiness before any deep-learning prototype is implemented.
 
 ## Known Limitations
 
@@ -176,5 +209,8 @@ Git.
 - Zonal features are deferred due to geometry mismatch.
 - Lesion features are forbidden for binary csPCa v1 due to leakage.
 - Baseline metrics are from one fold0 validation split only.
+- Evaluation/reporting artifacts exist for fold0 only.
 - Logistic Regression performance is modest and needs stronger validation.
+- Deep learning is not ready for serious training until folds 1-4 are
+  downloaded and preprocessing/GPU readiness is verified.
 - No model is clinically validated.

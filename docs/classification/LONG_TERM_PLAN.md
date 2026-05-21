@@ -109,20 +109,27 @@ Initial fold0 validation result:
 
 Goal: evaluate the selected fold0 baseline and produce reproducible reports.
 
+Status: initial fold0 report generation complete.
+
 Created:
 
 ```text
 scripts/classification/evaluate_picai_classifier.py
 ```
 
-Expected outputs outside Git:
+Outputs outside Git:
 
 - ROC curve.
 - PR curve.
 - Confusion matrix.
-- Calibration curve if practical.
 - Metrics JSON.
 - Model card draft.
+
+Current report directory:
+
+```text
+/home/degboh/prostate_mri_cancer_detection/reports/classifier_v1_fold0/
+```
 
 ## Phase 4 - Backend-Ready Inference Package
 

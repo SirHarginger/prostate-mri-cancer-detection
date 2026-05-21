@@ -106,6 +106,15 @@ python scripts/classification/evaluate_picai_classifier.py \
   --overwrite
 ```
 
+Deep-learning readiness audit command:
+
+```bash
+python scripts/classification/audit_deep_learning_readiness.py \
+  --manifest /home/degboh/prostate_mri_cancer_detection/data/features/picai_fold0_image_manifest.csv \
+  --output /home/degboh/prostate_mri_cancer_detection/outputs/deep_learning_readiness_fold0.json \
+  --limit 20
+```
+
 ## Output Locations
 
 Generated files should go under the cluster storage root:
