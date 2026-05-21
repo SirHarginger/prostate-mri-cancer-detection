@@ -1,36 +1,50 @@
-# nnU-Net Dataset501 Training Setup
+# nnU-Net Training Setup
 
-This document describes the setup commands for the nnU-Net v2 baseline dataset:
-`Dataset501_ProstateROI_T2`.
+This document describes nnU-Net v2 setup for the current main Prostate158
+datasets.
 
-Dataset501 is a T2-only whole-prostate ROI segmentation dataset derived from
-MSD Task05 Prostate. It uses MSD channel `0` only and binary prostate ROI masks
-created by merging the original peripheral-zone and transition-zone labels.
-These labels are not tumor masks.
+The main nnU-Net training data is now Prostate158:
+
+- `Dataset502_Prostate158_Anatomy`: T2-only anatomy segmentation.
+- `Dataset503_Prostate158_Lesion`: T2 + ADC + DWI suspicious lesion
+  segmentation.
+
+`Dataset501_ProstateROI_T2` is retained as a bootstrap/baseline artifact only.
 
 ## Expected Folder Structure
 
-Before running nnU-Net planning or training, this structure should exist:
+Before running nnU-Net planning or training, these structures should exist:
 
 ```text
-data/nnunet/nnUNet_raw/Dataset501_ProstateROI_T2/
+data/nnunet/nnUNet_raw/Dataset502_Prostate158_Anatomy/
 |-- dataset.json
 |-- imagesTr/
-|   |-- prostate_000_0000.nii.gz
+|   |-- prostate158_020_0000.nii.gz
 |   `-- ...
 |-- labelsTr/
-|   |-- prostate_000.nii.gz
+|   |-- prostate158_020.nii.gz
 |   `-- ...
 `-- imagesTs/
-    |-- prostate_000_0000.nii.gz
-    `-- ...
+```
+
+```text
+data/nnunet/nnUNet_raw/Dataset503_Prostate158_Lesion/
+|-- dataset.json
+|-- imagesTr/
+|   |-- prostate158_020_0000.nii.gz  # T2
+|   |-- prostate158_020_0001.nii.gz  # ADC
+|   |-- prostate158_020_0002.nii.gz  # DWI
+|   `-- ...
+|-- labelsTr/
+|   |-- prostate158_020.nii.gz
+|   `-- ...
+`-- imagesTs/
 ```
 
 The generated data should contain:
 
-- `32` training T2 images in `imagesTr`.
-- `32` binary prostate ROI labels in `labelsTr`.
-- `16` test T2 images in `imagesTs`.
+- Dataset502: `139` T2 images and `139` anatomy labels.
+- Dataset503: `417` image channels and `139` binary suspicious lesion labels.
 
 ## Python Environment
 
@@ -73,54 +87,49 @@ source scripts/setup_nnunet_env.sh
 If you execute the script instead of sourcing it, the variables are only set
 inside that process; the preprocess/train helper scripts source it internally.
 
-## Planning and Preprocessing
+## Planning And Preprocessing
 
 Run dataset integrity verification, planning, and preprocessing:
 
 ```bash
-bash scripts/run_nnunet_dataset501_preprocess.sh
+bash scripts/run_nnunet_dataset502_preprocess.sh
+bash scripts/run_nnunet_dataset503_preprocess.sh
 ```
 
-This runs:
+These run:
 
 ```bash
-nnUNetv2_plan_and_preprocess -d 501 --verify_dataset_integrity
+nnUNetv2_plan_and_preprocess -d 502 --verify_dataset_integrity
+nnUNetv2_plan_and_preprocess -d 503 --verify_dataset_integrity
 ```
 
-## Fold 0 Baseline Training
+## Fold 0 Local Training
 
-Run the first 3D full-resolution baseline fold:
+On the local Quadro P1000, start with 2D fold 0 smoke-training after
+preprocessing:
 
 ```bash
-bash scripts/train_nnunet_dataset501_fold0.sh
+bash scripts/train_nnunet_dataset502_2d_fold0.sh
+bash scripts/train_nnunet_dataset503_2d_fold0.sh
 ```
 
-This runs:
+These run low-VRAM 2D plans:
 
 ```bash
-nnUNetv2_train 501 3d_fullres 0 -p nnUNetPlans_lowvram
+nnUNetv2_train 502 2d 0 -tr nnUNetTrainer_100epochs -p nnUNetPlans_lowvram
+nnUNetv2_train 503 2d 0 -tr nnUNetTrainer_100epochs -p nnUNetPlans_lowvram
 ```
 
-The helper script first creates `nnUNetPlans_lowvram.json` from the original
-plans and reduces the 3D full-resolution batch size from `2` to `1`. It also
-sets `nnUNet_compile=false` by default. This avoids `torch.compile`/Triton on
-older GPUs such as the Quadro P1000, which has CUDA compute capability 6.1.
-PyTorch CUDA can still use the GPU, but Triton requires newer hardware.
+Both local training scripts intentionally use `nnUNetTrainer_100epochs` instead
+of nnU-Net's default `1000` epochs.
 
-If 3D still runs out of memory on a 4 GB GPU, use the 2D fallback:
+The helper scripts set `nnUNet_compile=false` by default. This avoids
+`torch.compile`/Triton on older GPUs such as the Quadro P1000, which has CUDA
+compute capability 6.1. PyTorch CUDA can still use the GPU, but Triton requires
+newer hardware.
 
-```bash
-bash scripts/train_nnunet_dataset501_2d_fold0.sh
-```
-
-This runs:
-
-```bash
-nnUNetv2_train 501 2d 0 -p nnUNetPlans_lowvram
-```
-
-Do not treat the resulting model as clinically validated. This is a research
-segmentation baseline for prostate ROI masks.
+Use a higher-VRAM GPU for serious 3D full-resolution Prostate158 training. Do
+not treat any model output as clinically validated.
 
 ## Troubleshooting
 
@@ -129,20 +138,13 @@ segmentation baseline for prostate ROI masks.
 - If nnU-Net reports missing `nnUNet_raw`, `nnUNet_preprocessed`, or
   `nnUNet_results`, run `source scripts/setup_nnunet_env.sh` or use the helper
   scripts, which source it internally.
-- If dataset integrity verification fails, confirm `Dataset501_ProstateROI_T2`
-  exists under `data/nnunet/nnUNet_raw` and that file counts match the expected
-  `32` train images, `32` train labels, and `16` test images.
+- If dataset integrity verification fails, confirm Dataset502 and Dataset503
+  exist under `data/nnunet/nnUNet_raw` and that file counts match the expected
+  Prostate158 counts.
 - If CUDA/GPU errors occur during training, verify the active PyTorch
   installation, CUDA version, and `nvidia-smi` before restarting training.
 - If training crashes with a Triton or `torch.compile` message saying the GPU
-  needs CUDA capability `>= 7.0`, set `nnUNet_compile=false` before training:
-
-  ```bash
-  export nnUNet_compile=false
-  bash scripts/train_nnunet_dataset501_fold0.sh
-  ```
-
+  needs CUDA capability `>= 7.0`, set `nnUNet_compile=false` before training.
 - If training crashes later with CUDA out-of-memory, the 4 GB Quadro P1000 may
-  still be too small for `3d_fullres`. In that case, run
-  `bash scripts/train_nnunet_dataset501_2d_fold0.sh` first or use a GPU with
-  more VRAM for the 3D baseline.
+  be too small. Use the 2D scripts for local checks or move 3D training to a
+  GPU with more VRAM.

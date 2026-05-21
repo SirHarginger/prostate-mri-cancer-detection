@@ -38,4 +38,4 @@ python scripts/create_nnunet_lowvram_plan.py \
   --preprocessed-dir data/nnunet/nnUNet_preprocessed/Dataset503_Prostate158_Lesion \
   --two-d-batch-size 2 \
   --three-d-batch-size 1
-nnUNetv2_train 503 2d 0 -p nnUNetPlans_lowvram
+nnUNetv2_train 503 2d 0 -tr nnUNetTrainer_100epochs -p nnUNetPlans_lowvram

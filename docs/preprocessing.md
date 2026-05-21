@@ -32,10 +32,13 @@ Outputs:
 
 The raw MSD files under `data/raw` are not modified.
 
-## nnU-Net Dataset501 Prostate ROI T2
+## Archived Bootstrap: nnU-Net Dataset501 Prostate ROI T2
 
-After creating binary whole-prostate ROI labels, convert MSD Task05 to a
-T2-only nnU-Net raw dataset:
+Dataset501 was created earlier as a bootstrap whole-prostate ROI baseline from
+MSD Task05. It is kept for history and comparison only; Prostate158 is now the
+main nnU-Net training data.
+
+The archived conversion command was:
 
 ```bash
 python scripts/create_nnunet_dataset501_prostate_roi_t2.py \
@@ -55,5 +58,15 @@ This writes:
 The original MSD images and prepared binary ROI labels are read-only inputs.
 The labels are whole-prostate ROI masks, not tumor masks.
 
-See `docs/nnunet_training.md` for nnU-Net v2 environment setup, planning,
-preprocessing, and fold 0 baseline training commands for Dataset501.
+## Prostate158 Anatomy And Lesion Datasets
+
+Prostate158 is the main nnU-Net training dataset for prostate anatomy and
+suspicious lesion segmentation. The conversion creates two nnU-Net raw
+datasets:
+
+- `Dataset502_Prostate158_Anatomy`: T2 image with anatomy labels.
+- `Dataset503_Prostate158_Lesion`: T2, ADC, and DWI images with binary ADC
+  reader1 lesion labels.
+
+The raw Prostate158 files are not modified. See `docs/prostate158_strategy.md`
+for commands, assumptions, label cautions, and QC guidance.

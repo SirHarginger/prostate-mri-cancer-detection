@@ -49,6 +49,14 @@ python scripts/create_nnunet_dataset503_prostate158_lesion.py \
   --manifest data/manifests/prostate158_manifest.csv \
   --output-dir data/nnunet/nnUNet_raw/Dataset503_Prostate158_Lesion \
   --overwrite
+
+python scripts/evaluate_prostate158_predictions.py \
+  --overwrite \
+  --qc-count 6
+
+python scripts/prepare_kaggle_prostate_mri_t2.py --overwrite
+bash scripts/predict_kaggle_prostate_mri_anatomy.sh
+python scripts/visualize_kaggle_auto_segmentations.py --overwrite
 ```
 
 ## Repository Layout
