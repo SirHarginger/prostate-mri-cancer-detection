@@ -142,9 +142,6 @@ def resample_mask_to_image(mask: Any, reference_image: Any) -> Any:
     sitk_module = require_sitk()
     mask = binarize_mask(mask)
 
-    if images_have_same_geometry(reference_image, mask):
-        return mask
-
     resampled = sitk_module.Resample(
         mask,
         reference_image,
@@ -153,7 +150,9 @@ def resample_mask_to_image(mask: Any, reference_image: Any) -> Any:
         0,
         sitk_module.sitkUInt8,
     )
-    return binarize_mask(resampled)
+    resampled = binarize_mask(resampled)
+    resampled.CopyInformation(reference_image)
+    return resampled
 
 
 def nonzero_voxel_count(mask: Any) -> int:
