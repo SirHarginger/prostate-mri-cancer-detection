@@ -94,6 +94,19 @@ Open and run the QC notebook:
 notebooks/exploratory/02_visualize_prostate158_samples.ipynb
 ```
 
+## PI-CAI Classifier Feature Extraction
+
+PI-CAI fold0 classifier work uses case-level clinical variables plus T2W
+whole-gland radiomics. Lesion-mask radiomics are excluded from binary csPCa
+classification because fold0 lesion-mask emptiness/non-emptiness leaks the case
+label.
+
+```bash
+python scripts/classification/extract_picai_case_features.py \
+  --manifest /home/degboh/prostate_mri_cancer_detection/data/features/picai_fold0_image_manifest.csv \
+  --output /home/degboh/prostate_mri_cancer_detection/data/features/picai_fold0_case_features.csv
+```
+
 ## Kaggle PROSTATE_MRI Auto-Segmentation
 
 The assignment target data is restored under:
