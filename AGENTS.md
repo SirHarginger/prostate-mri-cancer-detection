@@ -22,21 +22,24 @@ This is not clinical software and is not clinically validated.
 The project has pivoted from auto-segmentation-first work to a
 classifier-first PI-CAI prostate MRI workflow. The current priority is a
 leakage-safe, case-level classifier for clinically significant prostate cancer
-(csPCa), starting with PI-CAI fold0.
+(csPCa), now scaling from the fold0 baseline to the full 1500-case PI-CAI
+bpMRI dataset.
 
-Auto-segmentation work remains useful historical and supporting context, but it
-is not the next implementation milestone.
+Auto-segmentation, nnU-Net, Kaggle, MSD, and Prostate158 work is historical
+context only. It is not the next implementation path.
 
 ### Current Next Milestone
 
 The next major implementation task is:
 
 ```text
-scripts/classification/train_picai_baseline_classifier.py
+all-fold PI-CAI classifier data audit and preprocessing/crop QC
 ```
 
-That script should train baseline fold0 binary csPCa classifiers from the
-existing leakage-safe feature table. Do not start with advanced architectures.
+Do not start with advanced architectures. Follow
+`docs/classification/RESEARCH_FRAMEWORK.md` and establish all-fold data QC,
+all-fold leakage-safe classical baselines, and crop preprocessing before deep
+training.
 
 ### Local, GitHub, and Cluster Workflow
 
@@ -79,8 +82,10 @@ Large cluster data and output paths:
 
 - Full PI-CAI clinical manifest: 1500 cases, with 1075 non-csPCa and
   425 csPCa cases. The binary target is `case_cspca_binary`.
-- PI-CAI fold0 image manifest: 300 cases with core bpMRI
-  (`T2W + ADC + HBV`), with 213 non-csPCa and 87 csPCa cases.
+- PI-CAI all-fold image manifest: 1500 cases with core bpMRI
+  (`T2W + ADC + HBV`), with 1075 non-csPCa and 425 csPCa cases.
+- Current all-fold image manifest:
+  `/home/degboh/prostate_mri_cancer_detection/data/features/picai_all_folds_image_manifest.csv`
 - Current fold0 feature table:
   `/home/degboh/prostate_mri_cancer_detection/data/features/picai_fold0_case_features.csv`
 - Current feature shape: 300 rows x 118 columns.

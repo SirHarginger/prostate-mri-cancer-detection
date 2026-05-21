@@ -1,8 +1,10 @@
 # Keep this file minimal.
 # Add dependencies only when a script or package module actually requires them.
-nibabel
-numpy
-matplotlib
-pydicom
-scikit-learn
 joblib
+matplotlib
+numpy
+pandas
+pyradiomics
+scikit-learn
+SimpleITK
+tqdm

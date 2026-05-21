@@ -1,62 +1,78 @@
 # Prostate MRI Cancer Detection Research
 
-Research repository for prostate MRI data engineering, nnU-Net segmentation
-baselines, and downstream experimental modeling.
+Research repository for classifier-first prostate MRI cancer detection using
+PI-CAI bpMRI data.
 
 This project is a research prototype. It is not clinically validated and must
 not be used for real clinical decisions.
 
 ## Current Focus
 
-The main training dataset is now:
+The project has pivoted to a leakage-safe, case-level classifier for clinically
+significant prostate cancer.
+
+Primary dataset:
 
 ```text
-data/raw/public/prostate158_train/
+PI-CAI public prostate MRI dataset
 ```
 
-Prostate158 is converted into two nnU-Net raw datasets:
+Cluster data root:
 
-- `Dataset502_Prostate158_Anatomy`: T2 anatomy segmentation.
-- `Dataset503_Prostate158_Lesion`: T2 + ADC + DWI suspicious lesion
-  segmentation.
+```text
+/home/degboh/prostate_mri_cancer_detection
+```
 
-Dataset501 from MSD Task05 is kept only as a completed bootstrap/baseline
-artifact. It is not the primary training direction.
+Current all-fold image manifest:
 
-The current milestone is a reproducible Prostate158 nnU-Net foundation:
+```text
+/home/degboh/prostate_mri_cancer_detection/data/features/picai_all_folds_image_manifest.csv
+```
 
-1. Preserve raw downloaded data under `data/raw`.
-2. Build a Prostate158 manifest under `data/manifests`.
-3. Convert Prostate158 into nnU-Net raw Dataset502 and Dataset503.
-4. Keep anatomy segmentation and lesion segmentation workflows separate.
-5. Add QC, tests, and documentation before nnU-Net training.
+Current all-fold status:
+
+- 1500 PI-CAI cases.
+- 1500 cases with core bpMRI: T2W, ADC, and HBV.
+- 1075 non-csPCa cases.
+- 425 csPCa cases.
+
+The current research design is documented in:
+
+```text
+docs/classification/RESEARCH_FRAMEWORK.md
+```
+
+## Scientific Guardrails
+
+- Do not use lesion masks, lesion crops, lesion-mask volume, or lesion-derived
+  radiomics for binary csPCa detection.
+- Do not use `case_isup_int`, Gleason, pathology-derived, diagnosis-derived, or
+  target-derived variables as predictors.
+- Do not split slices independently across train and validation.
+- Use patient/case-level splits only.
+- Use whole-gland masks only as anatomical support for cropping or
+  whole-gland radiomics.
+- Keep generated data, feature CSVs, model artifacts, outputs, logs, and
+  reports outside Git.
 
 ## Main Commands
 
+Build the all-fold image manifest on the cluster:
+
 ```bash
-python scripts/build_prostate158_manifest.py \
-  --input-dir data/raw/public/prostate158_train \
-  --output data/manifests/prostate158_manifest.csv \
-  --split-output data/manifests/splits/prostate158_nnunet_split.json \
-  --overwrite
+python scripts/classification/build_picai_image_manifest.py \
+  --mask-manifest /home/degboh/prostate_mri_cancer_detection/data/features/picai_mask_manifest.csv \
+  --images-root /home/degboh/prostate_mri_cancer_detection/data/raw/picai/images \
+  --output /home/degboh/prostate_mri_cancer_detection/data/features/picai_all_folds_image_manifest.csv
+```
 
-python scripts/create_nnunet_dataset502_prostate158_anatomy.py \
-  --manifest data/manifests/prostate158_manifest.csv \
-  --output-dir data/nnunet/nnUNet_raw/Dataset502_Prostate158_Anatomy \
-  --overwrite
+Run the deep-learning readiness audit on the cluster:
 
-python scripts/create_nnunet_dataset503_prostate158_lesion.py \
-  --manifest data/manifests/prostate158_manifest.csv \
-  --output-dir data/nnunet/nnUNet_raw/Dataset503_Prostate158_Lesion \
-  --overwrite
-
-python scripts/evaluate_prostate158_predictions.py \
-  --overwrite \
-  --qc-count 6
-
-python scripts/prepare_kaggle_prostate_mri_t2.py --overwrite
-bash scripts/predict_kaggle_prostate_mri_anatomy.sh
-python scripts/visualize_kaggle_auto_segmentations.py --overwrite
+```bash
+python scripts/classification/audit_deep_learning_readiness.py \
+  --manifest /home/degboh/prostate_mri_cancer_detection/data/features/picai_all_folds_image_manifest.csv \
+  --output /home/degboh/prostate_mri_cancer_detection/outputs/deep_learning_readiness_all_folds.json \
+  --limit 50
 ```
 
 ## Repository Layout
@@ -66,10 +82,10 @@ This scaffold follows [AGENTS.md](AGENTS.md):
 ```text
 configs/      Experiment and preprocessing configs
 data/         Raw, interim, processed, manifest, and external data folders
-docs/         Dataset, methodology, preprocessing, experiment, and runbook docs
+docs/         Classifier research design, guardrails, status, and workflow docs
 notebooks/    Exploratory notebooks only
 outputs/      Logs, metrics, predictions, figures, and reports
-scripts/      Thin command-line entrypoints
+scripts/      Classifier-first command-line entrypoints
 src/          Reusable Python package code
 tests/        Unit tests and synthetic fixtures
 ```

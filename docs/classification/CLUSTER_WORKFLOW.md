@@ -87,6 +87,24 @@ Expected current output:
 - Feature errors: 0.
 - PyRadiomics GLCM symmetry warning may appear and is informational.
 
+All-fold image manifest build command:
+
+```bash
+python scripts/classification/build_picai_image_manifest.py \
+  --mask-manifest /home/degboh/prostate_mri_cancer_detection/data/features/picai_mask_manifest.csv \
+  --images-root /home/degboh/prostate_mri_cancer_detection/data/raw/picai/images \
+  --output /home/degboh/prostate_mri_cancer_detection/data/features/picai_all_folds_image_manifest.csv
+```
+
+Expected all-fold image manifest output:
+
+- Shape: 1500 rows x 35 columns.
+- T2W: 1500 available.
+- ADC: 1500 available.
+- HBV: 1500 available.
+- Core bpMRI cases: 1500.
+- Label counts: 1075 non-csPCa and 425 csPCa.
+
 Baseline fold0 classifier training command:
 
 ```bash
@@ -110,9 +128,9 @@ Deep-learning readiness audit command:
 
 ```bash
 python scripts/classification/audit_deep_learning_readiness.py \
-  --manifest /home/degboh/prostate_mri_cancer_detection/data/features/picai_fold0_image_manifest.csv \
-  --output /home/degboh/prostate_mri_cancer_detection/outputs/deep_learning_readiness_fold0.json \
-  --limit 20
+  --manifest /home/degboh/prostate_mri_cancer_detection/data/features/picai_all_folds_image_manifest.csv \
+  --output /home/degboh/prostate_mri_cancer_detection/outputs/deep_learning_readiness_all_folds.json \
+  --limit 50
 ```
 
 ## Output Locations

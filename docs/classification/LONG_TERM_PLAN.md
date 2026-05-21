@@ -8,7 +8,8 @@ research prototype and is not clinically validated.
 Goal: make the repository self-explanatory for Codex sessions, humans, and
 future collaborators.
 
-Status: current documentation task.
+Status: complete for the current classifier-first pivot, with ongoing updates
+as experiments mature.
 
 Tasks:
 
@@ -173,15 +174,35 @@ Expected output shape:
 Goal: expand from fold0 to the full PI-CAI dataset after the fold0 workflow is
 stable.
 
+Status: image download and all-fold image manifest are complete; all-fold
+feature extraction and all-fold modeling are next.
+
 Tasks:
 
-- Download folds 1-4 on the cluster.
-- Rebuild the image manifest.
-- Confirm all 1500 cases have T2W, ADC, and HBV where expected.
+- Download folds 1-4 on the cluster. Complete.
+- Rebuild the image manifest. Complete:
+
+```text
+/home/degboh/prostate_mri_cancer_detection/data/features/picai_all_folds_image_manifest.csv
+```
+
+- Confirm all 1500 cases have T2W, ADC, and HBV where expected. Complete.
 - Run QC checks.
 - Extract all-case leakage-safe features.
 - Train the full PI-CAI classifier.
 - Use stronger validation, including possible center-aware validation.
+
+Current all-fold image status:
+
+- Manifest shape: 1500 rows x 35 columns.
+- Core bpMRI cases: 1500.
+- Labels: 1075 non-csPCa and 425 csPCa.
+
+The controlling research design for the next implementation phase is:
+
+```text
+docs/classification/RESEARCH_FRAMEWORK.md
+```
 
 ## Phase 6 - Add ADC/HBV Whole-Gland Features
 

@@ -42,6 +42,21 @@ PI-CAI fold0 image manifest:
 - Core bpMRI means T2W, ADC, and HBV are present.
 - Fold0 labels: 213 non-csPCa and 87 csPCa.
 
+PI-CAI all-fold image manifest:
+
+```text
+/home/degboh/prostate_mri_cancer_detection/data/features/picai_all_folds_image_manifest.csv
+```
+
+- 1500 cases.
+- 1500 cases with core bpMRI.
+- T2W: 1500 available.
+- ADC: 1500 available.
+- HBV: 1500 available.
+- Coronal T2W: 1497 available.
+- Sagittal T2W: 1498 available.
+- All-fold labels: 1075 non-csPCa and 425 csPCa.
+
 ## Feature Extraction Status
 
 Current feature table:
@@ -187,23 +202,38 @@ The evaluator reproduced the saved fold0 validation metrics:
 - Balanced accuracy: 0.6546.
 - F1: 0.5128.
 
+## Research Framework
+
+The controlling design document for the next phase is:
+
+```text
+docs/classification/RESEARCH_FRAMEWORK.md
+```
+
+It defines the experiment ladder, leakage rules, preprocessing architecture,
+split policy, metrics, and immediate all-fold implementation tasks.
+
 ## Next Task
 
-Run the deep-learning readiness audit on the cluster:
+Run an all-fold readiness/data audit on the cluster using the all-fold image
+manifest:
 
 ```bash
 python scripts/classification/audit_deep_learning_readiness.py \
-  --manifest /home/degboh/prostate_mri_cancer_detection/data/features/picai_fold0_image_manifest.csv \
-  --output /home/degboh/prostate_mri_cancer_detection/outputs/deep_learning_readiness_fold0.json \
-  --limit 20
+  --manifest /home/degboh/prostate_mri_cancer_detection/data/features/picai_all_folds_image_manifest.csv \
+  --output /home/degboh/prostate_mri_cancer_detection/outputs/deep_learning_readiness_all_folds.json \
+  --limit 50
 ```
 
-The audit should confirm image availability, sample geometry, and torch/MONAI/GPU
-readiness before any deep-learning prototype is implemented.
+The audit should confirm all-fold image availability, sample geometry,
+whole-gland crop feasibility, and torch/MONAI/GPU readiness before any
+deep-learning prototype is implemented.
 
 ## Known Limitations
 
-- Current work is fold0 only.
+- Full PI-CAI core bpMRI image availability is now confirmed in the all-fold
+  image manifest, but all-fold feature extraction and all-fold modeling have not
+  yet been run.
 - Current radiomics are T2W whole-gland only.
 - ADC/HBV whole-gland features are deferred.
 - Zonal features are deferred due to geometry mismatch.
@@ -211,6 +241,6 @@ readiness before any deep-learning prototype is implemented.
 - Baseline metrics are from one fold0 validation split only.
 - Evaluation/reporting artifacts exist for fold0 only.
 - Logistic Regression performance is modest and needs stronger validation.
-- Deep learning is not ready for serious training until folds 1-4 are
-  downloaded and preprocessing/GPU readiness is verified.
+- Deep learning is not ready for serious training until all-fold preprocessing,
+  crop QC, split policy, and GPU/PyTorch/MONAI readiness are verified.
 - No model is clinically validated.

@@ -10,27 +10,26 @@ not be used as a standalone diagnostic system.
 
 ## A. Readiness Verdict
 
-The project is ready for a small fold0 deep-learning prototype and readiness
+The project is ready for an all-fold preprocessing and deep-learning prototype
 audit. It is not ready for serious deep-learning training yet.
 
 Current readiness:
 
-- Ready for a pipeline prototype: yes, with PI-CAI fold0 and careful leakage
-  controls.
+- Ready for a pipeline prototype: yes, now with all 1500 PI-CAI core bpMRI cases
+  and careful leakage controls.
 - Ready for serious model training: no.
 - Ready for model claims or backend deployment: no.
 
 Why not serious training yet:
 
-- Only fold0 images are downloaded, giving 300 core bpMRI cases.
-- Folds 1-4 are not yet downloaded, so the full 1500-case PI-CAI image set is
-  unavailable.
+- All five image folds are downloaded and core bpMRI availability is confirmed,
+  but all-fold preprocessing and crop QC have not yet been validated.
 - The image preprocessing strategy for T2W/ADC/HBV alignment and prostate crop
   generation has not been validated.
 - PyTorch, MONAI, CUDA, and dataloader readiness still need to be audited on
   the cluster.
-- A leakage-safe classical baseline exists and should remain the comparison
-  baseline for any deep-learning work.
+- A leakage-safe fold0 classical baseline exists, but the serious all-fold
+  classical baseline still needs to be generated before deep-learning claims.
 
 ## B. Safe Deep-Learning Task Options
 
@@ -101,11 +100,20 @@ Fold0 is enough for:
 
 Fold0 is not enough for serious deep-learning claims.
 
-For serious experiments:
+All five folds are now downloaded. The all-fold image manifest contains:
 
-- Download PI-CAI folds 1-4 on the cluster.
-- Rebuild the image manifest for all downloaded folds.
-- Confirm expected core bpMRI availability across all 1500 cases.
+- 1500 total cases.
+- 1500 T2W cases.
+- 1500 ADC cases.
+- 1500 HBV cases.
+- 1075 non-csPCa cases.
+- 425 csPCa cases.
+
+Before serious experiments:
+
+- Audit all-fold image geometry and whole-gland mask availability.
+- Run all-fold leakage-safe feature extraction.
+- Train the all-fold classical baseline.
 - Preserve patient/case-level splitting.
 - Consider center-aware validation after the all-fold manifest is complete.
 - Plan external validation later.
@@ -191,10 +199,11 @@ Do not build a full trainer next.
 Recommended next implementation:
 
 ```text
-scripts/classification/audit_deep_learning_readiness.py
+All-fold data and crop readiness audit
 ```
 
-The audit should read the fold0 image manifest, count core bpMRI availability,
-sample image geometry, and report torch/MONAI/CUDA readiness. After that audit
-passes on the cluster, the next implementation should be a prototype dataset
-class or prostate-crop preprocessing script, not a full training pipeline.
+The audit should read the all-fold image manifest, count core bpMRI
+availability, sample image geometry, inspect whole-gland mask usability, and
+report torch/MONAI/CUDA readiness. After that audit passes on the cluster, the
+next implementation should be a prostate-crop preprocessing/QC script or
+prototype dataset class, not a full training pipeline.
