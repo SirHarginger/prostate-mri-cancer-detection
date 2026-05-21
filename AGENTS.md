@@ -17,6 +17,132 @@ This repository is research software for prostate MRI workflows, including:
 
 This is not clinical software and is not clinically validated.
 
+## Current Classifier-First Direction
+
+The project has pivoted from auto-segmentation-first work to a
+classifier-first PI-CAI prostate MRI workflow. The current priority is a
+leakage-safe, case-level classifier for clinically significant prostate cancer
+(csPCa), starting with PI-CAI fold0.
+
+Auto-segmentation work remains useful historical and supporting context, but it
+is not the next implementation milestone.
+
+### Current Next Milestone
+
+The next major implementation task is:
+
+```text
+scripts/classification/train_picai_baseline_classifier.py
+```
+
+That script should train baseline fold0 binary csPCa classifiers from the
+existing leakage-safe feature table. Do not start with advanced architectures.
+
+### Local, GitHub, and Cluster Workflow
+
+- Local machine: coding with VS Code and Codex.
+- GitHub: sync point between local code changes and the cluster.
+- Cluster: heavy data processing, PyRadiomics extraction, training,
+  evaluation, and model artifact generation.
+
+Cluster code repository:
+
+```text
+/home/degboh/projects/prostate-mri-cancer-detection
+```
+
+Cluster storage root:
+
+```text
+/home/degboh/prostate_mri_cancer_detection
+```
+
+Cluster conda setup:
+
+```bash
+source ~/miniforge3/etc/profile.d/conda.sh
+conda activate prostate-ml
+```
+
+Large cluster data and output paths:
+
+```text
+/home/degboh/prostate_mri_cancer_detection/data/raw/picai
+/home/degboh/prostate_mri_cancer_detection/data/features
+/home/degboh/prostate_mri_cancer_detection/outputs
+/home/degboh/prostate_mri_cancer_detection/artifacts
+/home/degboh/prostate_mri_cancer_detection/logs
+/home/degboh/prostate_mri_cancer_detection/reports
+```
+
+### Current PI-CAI Status
+
+- Full PI-CAI clinical manifest: 1500 cases, with 1075 non-csPCa and
+  425 csPCa cases. The binary target is `case_cspca_binary`.
+- PI-CAI fold0 image manifest: 300 cases with core bpMRI
+  (`T2W + ADC + HBV`), with 213 non-csPCa and 87 csPCa cases.
+- Current fold0 feature table:
+  `/home/degboh/prostate_mri_cancer_detection/data/features/picai_fold0_case_features.csv`
+- Current feature shape: 300 rows x 118 columns.
+- Feature errors: 0.
+- Current radiomics source: T2W whole-gland region only.
+
+### Classifier Scientific Guardrails
+
+Follow these hard rules for binary csPCa classification:
+
+- Do not use lesion-mask radiomics for the v1 binary classifier.
+- Do not use `case_ISUP`, `case_isup_int`, Gleason, pathology-derived, or
+  diagnosis-derived variables as predictors.
+- Do not blindly use every feature CSV column as a model input.
+- Do not use `case_cspca_binary`, IDs, `feature_error`, lesion columns, or
+  other target-derived columns as predictors.
+- Use safe predictors only: `patient_age`, `psa`, `psad`,
+  `prostate_volume`, encoded `center`, and `t2w_wholegland_*` radiomics.
+- Do not use zonal features in v1. The current zonal mask geometry is not
+  cleanly aligned.
+- Do not make diagnostic, clinical validation, or patient-care claims.
+
+Important leakage finding:
+
+```text
+In PI-CAI fold0, lesion masks are empty for all non-csPCa cases and non-empty
+for all csPCa cases. Lesion-mask features would therefore leak the target label.
+```
+
+Important geometry finding from example case `10000_1000000`:
+
+```text
+T2W image:         640 x 640 x 31
+ADC image:         116 x 114 x 31
+HBV image:         116 x 114 x 31
+Lesion mask:       116 x 114 x 31
+Whole-gland mask:  640 x 640 x 31
+Zonal mask:        640 x 640 x 25
+```
+
+Interpretation:
+
+- Lesion masks align with ADC/HBV space.
+- Whole-gland masks align with T2W space.
+- Zonal masks are deferred for v1.
+
+### Never Commit Generated or Private Artifacts
+
+Do not commit:
+
+- PI-CAI raw data.
+- `.mha`, `.nii`, `.nii.gz`, or `.dcm` files.
+- ZIP files.
+- Generated feature CSV files.
+- Model artifacts.
+- Outputs, logs, or reports.
+- `.env` files.
+- `.joblib`, `.pkl`, `.pt`, or `.pth` files.
+
+Generated classifier data, model artifacts, and reports belong under the
+cluster storage root, not in Git.
+
 ## Engineering Principles
 
 Follow these principles strictly.
