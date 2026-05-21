@@ -58,3 +58,4 @@ reports/
 *.pkl
 *.pt
 *.pth
+.env
