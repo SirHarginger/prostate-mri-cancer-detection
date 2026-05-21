@@ -96,6 +96,16 @@ python scripts/classification/train_picai_baseline_classifier.py \
   --overwrite
 ```
 
+Baseline fold0 classifier evaluation command:
+
+```bash
+python scripts/classification/evaluate_picai_classifier.py \
+  --features /home/degboh/prostate_mri_cancer_detection/data/features/picai_fold0_case_features.csv \
+  --model-dir /home/degboh/prostate_mri_cancer_detection/artifacts/classifier_v1_fold0 \
+  --output-dir /home/degboh/prostate_mri_cancer_detection/reports/classifier_v1_fold0 \
+  --overwrite
+```
+
 ## Output Locations
 
 Generated files should go under the cluster storage root:

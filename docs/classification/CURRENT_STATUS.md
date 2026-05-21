@@ -21,6 +21,7 @@ Current scripts:
 - `scripts/classification/check_picai_mask_content.py`
 - `scripts/classification/extract_picai_case_features.py`
 - `scripts/classification/train_picai_baseline_classifier.py`
+- `scripts/classification/evaluate_picai_classifier.py`
 
 The baseline classifier training script exists and has completed the first
 fold0 cluster run.
@@ -152,15 +153,20 @@ Validation metrics:
 
 ## Next Task
 
-Create the classifier evaluation/reporting script:
+Run classifier evaluation/reporting on the cluster:
 
-```text
-scripts/classification/evaluate_picai_classifier.py
+```bash
+python scripts/classification/evaluate_picai_classifier.py \
+  --features /home/degboh/prostate_mri_cancer_detection/data/features/picai_fold0_case_features.csv \
+  --model-dir /home/degboh/prostate_mri_cancer_detection/artifacts/classifier_v1_fold0 \
+  --output-dir /home/degboh/prostate_mri_cancer_detection/reports/classifier_v1_fold0 \
+  --overwrite
 ```
 
-The next script should load the saved fold0 classifier artifacts, write ROC and
-PR curves, confusion matrix figures, metrics JSON, and a model-card draft under
-the cluster output/report directories.
+The evaluation script loads the saved fold0 classifier artifacts, recreates the
+validation split from saved schema/metrics settings, and writes ROC and PR
+curves, a confusion matrix figure, metrics JSON, and a model-card draft outside
+Git.
 
 ## Known Limitations
 

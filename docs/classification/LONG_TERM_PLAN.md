@@ -109,7 +109,7 @@ Initial fold0 validation result:
 
 Goal: evaluate the selected fold0 baseline and produce reproducible reports.
 
-Create:
+Created:
 
 ```text
 scripts/classification/evaluate_picai_classifier.py

@@ -65,3 +65,13 @@ Known limitations:
 - Not clinically validated.
 - Requires evaluation plots, model-card draft, and stronger validation before
   any backend-facing inference package.
+
+Next reporting command:
+
+```bash
+python scripts/classification/evaluate_picai_classifier.py \
+  --features /home/degboh/prostate_mri_cancer_detection/data/features/picai_fold0_case_features.csv \
+  --model-dir /home/degboh/prostate_mri_cancer_detection/artifacts/classifier_v1_fold0 \
+  --output-dir /home/degboh/prostate_mri_cancer_detection/reports/classifier_v1_fold0 \
+  --overwrite
+```
