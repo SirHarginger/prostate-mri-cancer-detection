@@ -49,7 +49,9 @@ Current result:
 Goal: train defensible baseline binary csPCa classifiers from the fold0 feature
 table.
 
-Create:
+Status: initial fold0 cluster run complete.
+
+Created:
 
 ```text
 scripts/classification/train_picai_baseline_classifier.py
@@ -94,6 +96,14 @@ Metrics:
 - Balanced accuracy.
 - F1.
 - Confusion matrix.
+
+Initial fold0 validation result:
+
+- Selected model: Logistic Regression.
+- Logistic Regression ROC AUC: 0.6908.
+- Logistic Regression PR AUC: 0.4732.
+- Logistic Regression balanced accuracy: 0.6546.
+- Random Forest underperformed this first baseline split.
 
 ## Phase 3 - Evaluation and Reporting
 

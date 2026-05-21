@@ -22,8 +22,8 @@ Current scripts:
 - `scripts/classification/extract_picai_case_features.py`
 - `scripts/classification/train_picai_baseline_classifier.py`
 
-The baseline classifier training script now exists. A full cluster training run
-is still pending.
+The baseline classifier training script exists and has completed the first
+fold0 cluster run.
 
 ## Data Status
 
@@ -113,9 +113,9 @@ Exclude from predictors:
 - Any lesion-related column.
 - Any target-derived or diagnosis-derived variable.
 
-## Next Task
+## Baseline Classifier Status
 
-Run the baseline classifier on the cluster:
+Cluster command used:
 
 ```bash
 python scripts/classification/train_picai_baseline_classifier.py \
@@ -128,11 +128,39 @@ The script trains baseline Logistic Regression and Random Forest models from the
 fold0 feature CSV, saves artifacts outside Git, and reports ROC AUC, PR AUC,
 sensitivity, specificity, balanced accuracy, F1, and confusion matrix.
 
-Planned artifact directory:
+Artifact directory:
 
 ```text
 /home/degboh/prostate_mri_cancer_detection/artifacts/classifier_v1_fold0/
 ```
+
+Run result:
+
+- Input shape: 300 rows x 118 columns.
+- Feature count used by classifier: 112.
+- Target counts: 213 non-csPCa and 87 csPCa.
+- Split: `StratifiedGroupKFold(n_splits=5)`.
+- Train/validation cases: 240 train and 60 validation.
+- Selected model: Logistic Regression.
+
+Validation metrics:
+
+| Model | ROC AUC | PR AUC | Sensitivity | Specificity | Balanced Accuracy | F1 |
+|---|---:|---:|---:|---:|---:|---:|
+| Logistic Regression | 0.6908 | 0.4732 | 0.5882 | 0.7209 | 0.6546 | 0.5128 |
+| Random Forest | 0.5978 | 0.3549 | 0.2353 | 0.8837 | 0.5595 | 0.3077 |
+
+## Next Task
+
+Create the classifier evaluation/reporting script:
+
+```text
+scripts/classification/evaluate_picai_classifier.py
+```
+
+The next script should load the saved fold0 classifier artifacts, write ROC and
+PR curves, confusion matrix figures, metrics JSON, and a model-card draft under
+the cluster output/report directories.
 
 ## Known Limitations
 
@@ -141,5 +169,6 @@ Planned artifact directory:
 - ADC/HBV whole-gland features are deferred.
 - Zonal features are deferred due to geometry mismatch.
 - Lesion features are forbidden for binary csPCa v1 due to leakage.
-- Baseline classifier training has not yet been run on the cluster.
+- Baseline metrics are from one fold0 validation split only.
+- Logistic Regression performance is modest and needs stronger validation.
 - No model is clinically validated.
