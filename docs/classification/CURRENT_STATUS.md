@@ -20,8 +20,10 @@ Current scripts:
 - `scripts/classification/check_picai_geometry.py`
 - `scripts/classification/check_picai_mask_content.py`
 - `scripts/classification/extract_picai_case_features.py`
+- `scripts/classification/train_picai_baseline_classifier.py`
 
-No baseline classifier training script has been added yet.
+The baseline classifier training script now exists. A full cluster training run
+is still pending.
 
 ## Data Status
 
@@ -113,15 +115,18 @@ Exclude from predictors:
 
 ## Next Task
 
-Implement:
+Run the baseline classifier on the cluster:
 
-```text
-scripts/classification/train_picai_baseline_classifier.py
+```bash
+python scripts/classification/train_picai_baseline_classifier.py \
+  --features /home/degboh/prostate_mri_cancer_detection/data/features/picai_fold0_case_features.csv \
+  --output-dir /home/degboh/prostate_mri_cancer_detection/artifacts/classifier_v1_fold0 \
+  --overwrite
 ```
 
-The script should train baseline Logistic Regression and Random Forest models
-from the fold0 feature CSV, save artifacts outside Git, and report ROC AUC, PR
-AUC, sensitivity, specificity, balanced accuracy, F1, and confusion matrix.
+The script trains baseline Logistic Regression and Random Forest models from the
+fold0 feature CSV, saves artifacts outside Git, and reports ROC AUC, PR AUC,
+sensitivity, specificity, balanced accuracy, F1, and confusion matrix.
 
 Planned artifact directory:
 
@@ -136,5 +141,5 @@ Planned artifact directory:
 - ADC/HBV whole-gland features are deferred.
 - Zonal features are deferred due to geometry mismatch.
 - Lesion features are forbidden for binary csPCa v1 due to leakage.
-- No baseline classifier has been trained yet.
+- Baseline classifier training has not yet been run on the cluster.
 - No model is clinically validated.

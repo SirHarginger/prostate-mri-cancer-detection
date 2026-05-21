@@ -4,3 +4,5 @@ nibabel
 numpy
 matplotlib
 pydicom
+scikit-learn
+joblib

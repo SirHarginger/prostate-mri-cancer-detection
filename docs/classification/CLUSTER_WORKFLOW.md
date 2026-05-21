@@ -87,6 +87,15 @@ Expected current output:
 - Feature errors: 0.
 - PyRadiomics GLCM symmetry warning may appear and is informational.
 
+Baseline fold0 classifier training command:
+
+```bash
+python scripts/classification/train_picai_baseline_classifier.py \
+  --features /home/degboh/prostate_mri_cancer_detection/data/features/picai_fold0_case_features.csv \
+  --output-dir /home/degboh/prostate_mri_cancer_detection/artifacts/classifier_v1_fold0 \
+  --overwrite
+```
+
 ## Output Locations
 
 Generated files should go under the cluster storage root:
