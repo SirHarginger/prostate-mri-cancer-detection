@@ -123,3 +123,26 @@ def test_resample_mask_to_image_matches_reference_geometry() -> None:
     assert resampled.GetPixelID() == sitk.sitkUInt8
     assert set(resampled_arr.flatten().tolist()).issubset({0, 1})
     assert module.nonzero_voxel_count(resampled) > 0
+
+
+def test_resample_mask_to_image_normalizes_tiny_metadata_offsets() -> None:
+    sitk = pytest.importorskip("SimpleITK")
+    module = load_module()
+
+    image = sitk.Image([4, 4, 2], sitk.sitkFloat32)
+    image.SetSpacing((1.0, 1.0, 1.0))
+    image.SetOrigin((0.0, 0.0, 0.0))
+
+    mask = sitk.Image([4, 4, 2], sitk.sitkUInt8)
+    mask.SetSpacing((1.0, 1.0, 1.0))
+    mask.SetOrigin((0.000001, 0.0, 0.0))
+    mask.SetPixel(1, 1, 0, 1)
+
+    assert module.images_have_same_geometry(image, mask)
+
+    resampled = module.resample_mask_to_image(mask, image)
+
+    assert resampled.GetOrigin() == image.GetOrigin()
+    assert resampled.GetSpacing() == image.GetSpacing()
+    assert resampled.GetDirection() == image.GetDirection()
+    assert module.images_have_same_geometry(image, resampled)
