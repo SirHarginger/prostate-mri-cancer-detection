@@ -100,6 +100,46 @@ class RadiomicsFeatureTests(unittest.TestCase):
             self.assertEqual(summary["failures_written"], 1)
             self.assertIn("shape mismatch", read_csv_rows(failures)[0]["reason"])
 
+    def test_prefers_non_empty_t2w_compatible_mask_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            raw_root = create_radiomics_fixture(root, mask_values=[0] * 8)
+            second_mask = (
+                raw_root
+                / "picai_labels"
+                / "csPCa_lesion_delineations"
+                / "10000_1000000_second.nii.gz"
+            )
+            write_nifti_volume(
+                second_mask,
+                shape=(2, 2, 2),
+                spacing=(1.0, 1.0, 2.0),
+                values=[0, 1, 0, 0, 1, 0, 0, 1],
+            )
+            manifest = write_manifest(root)
+            preprocessing_report = write_preprocessing_report(
+                root,
+                raw_root,
+                extra_lesion_mask=second_mask,
+            )
+            output = root / "data" / "features" / "radiomics.csv"
+            failures = root / "outputs" / "reports" / "failures.csv"
+            settings = root / "outputs" / "reports" / "settings.json"
+
+            summary = extract_radiomics_features(
+                manifest_path=manifest,
+                raw_root=raw_root,
+                preprocessing_report_path=preprocessing_report,
+                output_path=output,
+                failure_log_path=failures,
+                settings_path=settings,
+                roi="lesion",
+            )
+
+            self.assertEqual(summary["features_written"], 1)
+            self.assertEqual(summary["failures_written"], 0)
+            self.assertTrue(read_csv_rows(output)[0]["mask_path"].endswith("10000_1000000_second.nii.gz"))
+
     def test_reads_compressed_metaimage_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             image_path = Path(tmpdir) / "compressed.mha"
@@ -167,9 +207,31 @@ def write_manifest(root: Path) -> Path:
     return manifest
 
 
-def write_preprocessing_report(root: Path, raw_root: Path) -> Path:
+def write_preprocessing_report(
+    root: Path,
+    raw_root: Path,
+    extra_lesion_mask: Path | None = None,
+) -> Path:
     report = root / "outputs" / "reports" / "preprocessing.json"
     report.parent.mkdir(parents=True, exist_ok=True)
+    lesion_masks = [
+        {
+            "path": str(
+                raw_root
+                / "picai_labels"
+                / "csPCa_lesion_delineations"
+                / "10000_1000000.nii.gz"
+            ),
+            "alignment_to_t2w": "t2w_compatible",
+        }
+    ]
+    if extra_lesion_mask is not None:
+        lesion_masks.append(
+            {
+                "path": str(extra_lesion_mask),
+                "alignment_to_t2w": "t2w_compatible",
+            }
+        )
     report.write_text(
         json.dumps(
             {
@@ -178,17 +240,7 @@ def write_preprocessing_report(root: Path, raw_root: Path) -> Path:
                     {
                         "case_id": "10000_1000000",
                         "masks": {
-                            "lesion": [
-                                {
-                                    "path": str(
-                                        raw_root
-                                        / "picai_labels"
-                                        / "csPCa_lesion_delineations"
-                                        / "10000_1000000.nii.gz"
-                                    ),
-                                    "alignment_to_t2w": "t2w_compatible",
-                                }
-                            ],
+                            "lesion": lesion_masks,
                             "gland": [],
                         },
                     }

@@ -49,7 +49,7 @@ shape and spacing before computing features.
 ## ROI And Alignment Policy
 
 - The extractor prefers the first `t2w_compatible` mask candidate from the
-  Stage 2 preprocessing validation report.
+  Stage 2 preprocessing validation report that is readable and non-empty.
 - Image and mask shape must match exactly.
 - Image and mask spacing must match within tolerance.
 - Empty masks are skipped and logged as failures.

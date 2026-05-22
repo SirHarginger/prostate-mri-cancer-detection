@@ -258,16 +258,39 @@ def choose_mask_path(
 
     case_id = row.get("case_id", "")
     if preprocessing_report is not None:
+        compatible_paths: list[Path] = []
         for case_report in preprocessing_report.get("cases", []):
             if case_report.get("case_id") != case_id:
                 continue
             for mask_report in case_report.get("masks", {}).get(roi, []):
                 if mask_report.get("alignment_to_t2w") == "t2w_compatible":
-                    return Path(mask_report["path"])
+                    compatible_paths.append(Path(mask_report["path"]))
+            non_empty_path = first_non_empty_mask_path(compatible_paths)
+            if non_empty_path is not None:
+                return non_empty_path
+            if compatible_paths:
+                return compatible_paths[0]
 
+    fallback_paths: list[Path] = []
     for value in split_pipe_value(row.get(ROI_PATH_COLUMNS[roi], "")):
-        return resolve_manifest_path(value, raw_root)
-    return None
+        fallback_paths.append(resolve_manifest_path(value, raw_root))
+    return first_non_empty_mask_path(fallback_paths)
+
+
+def first_non_empty_mask_path(paths: Iterable[Path]) -> Path | None:
+    """Return the first readable, non-empty mask path from candidates."""
+
+    first_existing_path: Path | None = None
+    for path in paths:
+        if first_existing_path is None:
+            first_existing_path = path
+        try:
+            volume = read_volume_data(path)
+        except Exception:  # noqa: BLE001 - candidate may be unreadable; extraction will log if selected.
+            continue
+        if any(value > 0 for value in volume.values):
+            return path
+    return first_existing_path
 
 
 def select_case_ids(
