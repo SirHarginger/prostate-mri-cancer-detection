@@ -6,18 +6,33 @@ venv/
 .env
 .ipynb_checkpoints/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Data - never push medical imaging data
+# Medical imaging / project data - never push
 data/raw/
-data/interim/
-data/processed/
-data/features/
+data/interim/*
+data/processed/*
+data/features/*
+
+# Keep folder placeholders
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+!data/features/.gitkeep
 
 # Outputs
-outputs/
+outputs/figures/*
+outputs/models/*
+outputs/reports/*
+!outputs/.gitkeep
+!outputs/figures/.gitkeep
+!outputs/models/.gitkeep
+!outputs/reports/.gitkeep
+
+# Logs
 logs/
 *.log
 
-# Editor / OS
-.vscode/
+# OS / editor
 .DS_Store
+.vscode/
