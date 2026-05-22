@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 
 from prostate_mri_cancer_detection.data import build_and_write_manifest
+from prostate_mri_cancer_detection.features import extract_radiomics_features
 from prostate_mri_cancer_detection.preprocessing import validate_preprocessing_inputs
 
 
@@ -83,6 +84,77 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fold to sample from. Can be provided multiple times.",
     )
     preprocessing_parser.set_defaults(func=run_preprocessing_validate)
+
+    radiomics_parser = subparsers.add_parser(
+        "radiomics-extract",
+        help="Extract Stage 3 first-order radiomics features for validated T2W-grid ROIs.",
+    )
+    radiomics_parser.add_argument(
+        "--manifest",
+        default="data/interim/picai_manifest.csv",
+        type=Path,
+        help="Stage 1 manifest CSV path.",
+    )
+    radiomics_parser.add_argument(
+        "--preprocessing-report",
+        default="outputs/reports/preprocessing_fold_sample_validation.json",
+        type=Path,
+        help="Stage 2 preprocessing validation report used for mask selection.",
+    )
+    radiomics_parser.add_argument(
+        "--raw-root",
+        default="data/raw/picai",
+        type=Path,
+        help="Path to the local PI-CAI raw root.",
+    )
+    radiomics_parser.add_argument(
+        "--sequence",
+        default="t2w",
+        choices=["t2w"],
+        help="MRI sequence for Stage 3 extraction. ADC/HBV wait for resampling.",
+    )
+    radiomics_parser.add_argument(
+        "--roi",
+        default="lesion",
+        choices=["gland", "lesion"],
+        help="ROI mask type to use.",
+    )
+    radiomics_parser.add_argument(
+        "--sample-size",
+        default=25,
+        type=int,
+        help="Number of manifest cases to extract if no preprocessing report/case IDs are provided.",
+    )
+    radiomics_parser.add_argument(
+        "--case-id",
+        action="append",
+        default=[],
+        help="Specific case ID to extract. Can be provided multiple times.",
+    )
+    radiomics_parser.add_argument(
+        "--all-cases",
+        action="store_true",
+        help="Extract all manifest cases. Use only after sample validation succeeds.",
+    )
+    radiomics_parser.add_argument(
+        "--output",
+        default="data/features/radiomics_t2w_lesion_sample.csv",
+        type=Path,
+        help="Feature table output path.",
+    )
+    radiomics_parser.add_argument(
+        "--failure-log",
+        default="outputs/reports/radiomics_t2w_lesion_failures.csv",
+        type=Path,
+        help="Per-case extraction failure log path.",
+    )
+    radiomics_parser.add_argument(
+        "--settings",
+        default="outputs/reports/radiomics_t2w_lesion_settings.json",
+        type=Path,
+        help="Reproducible extraction settings JSON path.",
+    )
+    radiomics_parser.set_defaults(func=run_radiomics_extract)
     return parser
 
 
@@ -128,6 +200,32 @@ def run_preprocessing_validate(args: argparse.Namespace) -> int:
     print(f"T2W-compatible mask cases: {summary['mask_t2w_compatible_cases']}")
     print(f"Blocking issue counts: {summary['issue_counts']}")
     print(f"Resampling required counts: {summary['resampling_required_counts']}")
+    return 0
+
+
+def run_radiomics_extract(args: argparse.Namespace) -> int:
+    """Run Stage 3 first-order radiomics extraction."""
+
+    summary = extract_radiomics_features(
+        manifest_path=args.manifest,
+        raw_root=args.raw_root,
+        output_path=args.output,
+        failure_log_path=args.failure_log,
+        settings_path=args.settings,
+        preprocessing_report_path=args.preprocessing_report,
+        sequence=args.sequence,
+        roi=args.roi,
+        sample_size=args.sample_size,
+        case_ids=args.case_id,
+        all_cases=args.all_cases,
+    )
+
+    print(f"Wrote radiomics feature table: {args.output}")
+    print(f"Wrote radiomics failure log: {args.failure_log}")
+    print(f"Wrote radiomics settings: {args.settings}")
+    print(f"Cases requested: {summary['cases_requested']}")
+    print(f"Features written: {summary['features_written']}")
+    print(f"Failures written: {summary['failures_written']}")
     return 0
 
 
