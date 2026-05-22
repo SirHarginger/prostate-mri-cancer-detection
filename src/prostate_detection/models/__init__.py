@@ -1,2 +1,0 @@
-"""Model definitions and registries."""
-

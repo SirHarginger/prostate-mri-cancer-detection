@@ -1,6 +1,0 @@
-name: prostate-ml
-channels:
-  - conda-forge
-dependencies:
-  - python=3.11
-prefix: /home/degboh/miniforge3/envs/prostate-ml
