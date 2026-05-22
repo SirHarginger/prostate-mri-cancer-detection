@@ -6,9 +6,11 @@ import json
 import struct
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 from prostate_mri_cancer_detection.features import extract_radiomics_features
+from prostate_mri_cancer_detection.features import read_volume_data
 
 
 class RadiomicsFeatureTests(unittest.TestCase):
@@ -97,6 +99,22 @@ class RadiomicsFeatureTests(unittest.TestCase):
             self.assertEqual(summary["features_written"], 0)
             self.assertEqual(summary["failures_written"], 1)
             self.assertIn("shape mismatch", read_csv_rows(failures)[0]["reason"])
+
+    def test_reads_compressed_metaimage_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_path = Path(tmpdir) / "compressed.mha"
+            write_mha_volume(
+                image_path,
+                shape=(2, 2, 1),
+                spacing=(1.0, 1.0, 1.0),
+                values=[1, 2, 3, 4],
+                compressed=True,
+            )
+
+            volume = read_volume_data(image_path)
+
+            self.assertEqual(volume.shape, [2, 2, 1])
+            self.assertEqual(list(volume.values), [1, 2, 3, 4])
 
 
 def create_radiomics_fixture(
@@ -187,6 +205,7 @@ def write_mha_volume(
     shape: tuple[int, int, int],
     spacing: tuple[float, float, float],
     values: list[int],
+    compressed: bool = False,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     header = "\n".join(
@@ -198,10 +217,13 @@ def write_mha_volume(
             "TransformMatrix = 1 0 0 0 1 0 0 0 1",
             "Offset = 0 0 0",
             "ElementType = MET_USHORT",
+            f"CompressedData = {str(compressed)}",
             "ElementDataFile = LOCAL",
         ]
     )
     payload = struct.pack("<" + "H" * len(values), *values)
+    if compressed:
+        payload = zlib.compress(payload)
     path.write_bytes(header.encode("latin-1") + b"\n" + payload)
 
 

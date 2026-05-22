@@ -42,6 +42,10 @@ The CSV contains one row per successfully extracted case/ROI:
 The failure log records `case_id`, `fold`, `sequence`, `roi`, `reason`,
 `image_path`, and `mask_path` for every failed extraction.
 
+The extractor supports uncompressed or zlib-compressed MetaImage payloads and
+NIfTI-1 masks using standard library readers. It still validates image/mask
+shape and spacing before computing features.
+
 ## ROI And Alignment Policy
 
 - The extractor prefers the first `t2w_compatible` mask candidate from the

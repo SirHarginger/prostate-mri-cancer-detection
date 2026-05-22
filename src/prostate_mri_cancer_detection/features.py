@@ -13,6 +13,7 @@ import gzip
 import json
 import math
 import struct
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -302,12 +303,10 @@ def read_volume_data(path: str | Path) -> VolumeData:
 
 
 def read_metaimage_volume(path: Path) -> VolumeData:
-    """Read voxel data from a MetaImage file with local binary data."""
+    """Read voxel data from a MetaImage file."""
 
     header = parse_metaimage_header(path)
     element_data_file = header.get("ElementDataFile", "")
-    if element_data_file.upper() != "LOCAL":
-        raise ValueError("only local MetaImage data are supported")
 
     shape = [int(value) for value in header["DimSize"].split()]
     spacing = [float(value) for value in header.get("ElementSpacing", "").split()]
@@ -315,14 +314,38 @@ def read_metaimage_volume(path: Path) -> VolumeData:
     if element_type not in ARRAY_TYPES:
         raise ValueError(f"unsupported MetaImage element type: {element_type}")
     type_code, item_size = ARRAY_TYPES[element_type]
-    payload = path.read_bytes()
-    data_offset = find_metaimage_data_offset(payload)
     count = math.prod(shape)
-    data = payload[data_offset : data_offset + count * item_size]
-    if len(data) < count * item_size:
+    expected_bytes = count * item_size
+    data = read_metaimage_payload(path, header, expected_bytes)
+    if len(data) < expected_bytes:
         raise ValueError("MetaImage voxel data are shorter than expected")
-    values = bytes_to_array(data, type_code, element_byte_order(header), count)
+    values = bytes_to_array(data[:expected_bytes], type_code, element_byte_order(header), count)
     return VolumeData(str(path), values, shape, spacing, element_type)
+
+
+def read_metaimage_payload(path: Path, header: dict[str, str], expected_bytes: int) -> bytes:
+    """Read and optionally decompress MetaImage voxel payload bytes."""
+
+    element_data_file = header.get("ElementDataFile", "")
+    if element_data_file.upper() == "LOCAL":
+        payload = path.read_bytes()
+        data_offset = find_metaimage_data_offset(payload)
+        data = payload[data_offset:]
+    else:
+        data_path = path.parent / element_data_file
+        if not data_path.exists():
+            raise ValueError(f"MetaImage external data file does not exist: {data_path}")
+        data = data_path.read_bytes()
+
+    if is_metaimage_compressed(header):
+        try:
+            data = zlib.decompress(data)
+        except zlib.error as error:
+            raise ValueError(f"could not decompress MetaImage payload: {error}") from error
+
+    if len(data) < expected_bytes:
+        raise ValueError("MetaImage voxel data are shorter than expected")
+    return data
 
 
 def read_nifti_volume(path: Path) -> VolumeData:
@@ -423,6 +446,12 @@ def element_byte_order(header: dict[str, str]) -> str:
 
     value = header.get("ElementByteOrderMSB", header.get("BinaryDataByteOrderMSB", "False"))
     return ">" if value.lower() in {"true", "1"} else "<"
+
+
+def is_metaimage_compressed(header: dict[str, str]) -> bool:
+    """Return whether MetaImage payload bytes are zlib compressed."""
+
+    return header.get("CompressedData", "False").lower() in {"true", "1"}
 
 
 def bytes_to_array(data: bytes, type_code: str, endian: str, count: int) -> array.array:
