@@ -20,6 +20,11 @@ MODALITY_SUFFIXES = {
     "hbv": "_hbv",
 }
 
+NON_MANIFEST_IMAGE_SUFFIXES = {
+    "cor": "_cor",
+    "sag": "_sag",
+}
+
 MEDICAL_IMAGE_EXTENSIONS = (
     ".nii.gz",
     ".nii",
@@ -185,12 +190,17 @@ def index_picai_images(image_root: str | Path) -> tuple[dict[str, dict[str, list
 
     image_root = Path(image_root)
     image_index: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+    non_manifest_files: dict[str, list[str]] = defaultdict(list)
     skipped_files: list[str] = []
 
     for image_path in sorted(iter_medical_image_files(image_root)):
         parsed = parse_image_filename(image_path)
         if parsed is None:
-            skipped_files.append(str(image_path))
+            non_manifest = parse_non_manifest_image_filename(image_path)
+            if non_manifest is None:
+                skipped_files.append(str(image_path))
+            else:
+                non_manifest_files[non_manifest.modality].append(str(image_path))
             continue
         image_index[parsed.case_id][parsed.modality].append(
             {
@@ -212,6 +222,7 @@ def index_picai_images(image_root: str | Path) -> tuple[dict[str, dict[str, list
                 )
 
     return dict(image_index), {
+        "non_manifest_image_files": dict(non_manifest_files),
         "skipped_image_files": skipped_files,
         "duplicate_image_modalities": duplicates,
     }
@@ -220,9 +231,24 @@ def index_picai_images(image_root: str | Path) -> tuple[dict[str, dict[str, list
 def parse_image_filename(path: str | Path) -> ParsedImageName | None:
     """Parse PI-CAI image filenames like ``10000_1000000_t2w.mha``."""
 
+    return parse_image_filename_with_suffixes(path, MODALITY_SUFFIXES)
+
+
+def parse_non_manifest_image_filename(path: str | Path) -> ParsedImageName | None:
+    """Parse recognized PI-CAI image planes excluded from the Stage 1 manifest."""
+
+    return parse_image_filename_with_suffixes(path, NON_MANIFEST_IMAGE_SUFFIXES)
+
+
+def parse_image_filename_with_suffixes(
+    path: str | Path,
+    suffixes: dict[str, str],
+) -> ParsedImageName | None:
+    """Parse a PI-CAI image filename with explicit modality suffixes."""
+
     stem = strip_medical_extension(Path(path).name)
     lower_stem = stem.lower()
-    for modality, suffix in MODALITY_SUFFIXES.items():
+    for modality, suffix in suffixes.items():
         if lower_stem.endswith(suffix):
             case_id = stem[: -len(suffix)]
             patient_id, study_id = split_case_id(case_id)
@@ -342,6 +368,16 @@ def build_validation_report(
     orphan_clinical = sorted(set(clinical_rows) - case_ids)
     orphan_gland = sorted(set(gland_masks) - case_ids)
     orphan_lesion = sorted(set(lesion_masks) - case_ids)
+    non_manifest_files = image_diagnostics["non_manifest_image_files"]
+    non_manifest_counts = {
+        suffix: len(paths)
+        for suffix, paths in sorted(non_manifest_files.items())
+    }
+    non_manifest_sample = [
+        path
+        for suffix in sorted(non_manifest_files)
+        for path in non_manifest_files[suffix][:10]
+    ][:20]
 
     warnings = []
     if not label_root.exists():
@@ -374,6 +410,9 @@ def build_validation_report(
         "missing_data_counts": dict(sorted(missing_counter.items())),
         "duplicate_image_modalities_count": len(image_diagnostics["duplicate_image_modalities"]),
         "duplicate_image_modalities_sample": image_diagnostics["duplicate_image_modalities"][:20],
+        "non_manifest_image_files_count": sum(non_manifest_counts.values()),
+        "non_manifest_image_files_by_suffix": non_manifest_counts,
+        "non_manifest_image_files_sample": non_manifest_sample,
         "skipped_image_files_count": len(image_diagnostics["skipped_image_files"]),
         "skipped_image_files_sample": image_diagnostics["skipped_image_files"][:20],
         "fold_mismatch_cases_count": len(fold_mismatch_cases),

@@ -9,6 +9,7 @@ from prostate_mri_cancer_detection.data import (
     build_picai_manifest,
     parse_case_id_from_label,
     parse_image_filename,
+    parse_non_manifest_image_filename,
 )
 
 
@@ -22,6 +23,14 @@ class PicaiManifestTests(unittest.TestCase):
         self.assertEqual(parsed.study_id, "1000000")
         self.assertEqual(parsed.modality, "t2w")
         self.assertIsNone(parse_image_filename("10000_1000000_t2w_extra.mha"))
+
+    def test_parse_non_manifest_image_filename_tracks_extra_planes(self) -> None:
+        parsed = parse_non_manifest_image_filename("10000_1000000_cor.mha")
+
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.case_id, "10000_1000000")
+        self.assertEqual(parsed.modality, "cor")
+        self.assertIsNone(parse_image_filename("10000_1000000_cor.mha"))
 
     def test_parse_label_case_id_from_nested_path(self) -> None:
         case_id = parse_case_id_from_label(
@@ -65,6 +74,8 @@ class PicaiManifestTests(unittest.TestCase):
             self.assertEqual(report["gland_mask_cases_linked"], 1)
             self.assertEqual(report["lesion_mask_cases_linked"], 1)
             self.assertEqual(report["missing_data_counts"]["missing_hbv"], 1)
+            self.assertEqual(report["non_manifest_image_files_by_suffix"], {"cor": 1, "sag": 1})
+            self.assertEqual(report["skipped_image_files_count"], 0)
 
     def test_duplicate_modality_is_flagged(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -99,6 +110,8 @@ def create_picai_fixture(root: Path) -> Path:
         touch(raw_root / "images" / "fold0" / f"10000_1000000_{modality}.mha")
     for modality in ("t2w", "adc"):
         touch(raw_root / "images" / "fold1" / f"10001_1000001_{modality}.mha")
+    for plane in ("cor", "sag"):
+        touch(raw_root / "images" / "fold0" / f"10000_1000000_{plane}.mha")
 
     clinical_dir = raw_root / "picai_labels" / "clinical_information"
     clinical_dir.mkdir(parents=True, exist_ok=True)

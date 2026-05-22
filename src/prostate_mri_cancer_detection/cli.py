@@ -57,6 +57,8 @@ def run_manifest(args: argparse.Namespace) -> int:
     print(f"Clinical rows linked: {report['clinical_rows_linked']}")
     print(f"Gland mask cases linked: {report['gland_mask_cases_linked']}")
     print(f"Lesion mask cases linked: {report['lesion_mask_cases_linked']}")
+    print(f"Non-manifest image files: {report['non_manifest_image_files_by_suffix']}")
+    print(f"Skipped image files: {report['skipped_image_files_count']}")
     print(f"Missing data counts: {report['missing_data_counts']}")
     return 0
 

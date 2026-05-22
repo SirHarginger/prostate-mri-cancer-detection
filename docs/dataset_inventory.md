@@ -49,9 +49,16 @@ The JSON report summarizes:
 - linked clinical rows
 - linked anatomical and lesion mask cases
 - duplicate image modality records
+- recognized non-manifest image planes such as `_cor` and `_sag`
 - orphan clinical rows or masks not linked to discovered image cases
 - missing-data flag counts
-- skipped image-like files that do not match exact modality naming
+- skipped image-like files that match neither target bpMRI modalities nor
+  recognized non-manifest planes
+
+Coronal and sagittal image files are inventoried in the validation report as
+non-manifest image files. They are not included as Stage 1 manifest columns
+because the planned bpMRI workflow begins with the axial T2W, ADC, and high
+b-value DWI trio.
 
 ## Claim Limits
 
