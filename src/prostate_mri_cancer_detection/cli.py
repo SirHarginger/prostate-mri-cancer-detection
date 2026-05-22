@@ -121,10 +121,13 @@ def run_preprocessing_validate(args: argparse.Namespace) -> int:
 
     print(f"Wrote preprocessing validation report: {args.report}")
     print(f"Cases checked: {summary['cases_checked']}")
-    print(f"Cases with issues: {summary['cases_with_issues']}")
+    print(f"Cases with blocking issues: {summary['cases_with_blocking_issues']}")
+    print(f"Cases requiring resampling: {summary['cases_requiring_resampling']}")
     print(f"Readable modality headers: {summary['modality_headers_readable']}")
     print(f"Readable mask headers: {summary['mask_headers_readable']}")
-    print(f"Issue counts: {summary['issue_counts']}")
+    print(f"T2W-compatible mask cases: {summary['mask_t2w_compatible_cases']}")
+    print(f"Blocking issue counts: {summary['issue_counts']}")
+    print(f"Resampling required counts: {summary['resampling_required_counts']}")
     return 0
 
 

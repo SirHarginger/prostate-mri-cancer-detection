@@ -57,11 +57,14 @@ class PreprocessingValidationTests(unittest.TestCase):
             self.assertTrue(report_path.exists())
             self.assertEqual(report["summary"]["cases_checked"], 1)
             self.assertEqual(report["summary"]["cases_with_issues"], 0)
+            self.assertEqual(report["summary"]["cases_with_blocking_issues"], 0)
+            self.assertEqual(report["summary"]["cases_requiring_resampling"], 0)
             self.assertEqual(
                 report["summary"]["modality_headers_readable"],
                 {"t2w": 1, "adc": 1, "hbv": 1},
             )
             self.assertEqual(report["summary"]["mask_headers_readable"], {"gland": 1, "lesion": 1})
+            self.assertEqual(report["summary"]["mask_t2w_compatible_cases"], {"gland": 1, "lesion": 1})
             self.assertEqual(report["normalization_plan"]["stage2_status"], "planned_not_applied")
             self.assertEqual(
                 report["roi_plan"]["stage2_status"],
@@ -81,9 +84,44 @@ class PreprocessingValidationTests(unittest.TestCase):
                 sample_size=1,
             )
 
-            self.assertEqual(report["summary"]["cases_with_issues"], 1)
-            self.assertEqual(report["summary"]["issue_counts"]["adc_shape_mismatch"], 1)
+            self.assertEqual(report["summary"]["cases_with_blocking_issues"], 0)
+            self.assertEqual(report["summary"]["cases_requiring_resampling"], 1)
+            self.assertEqual(
+                report["summary"]["resampling_required_counts"]["adc_to_t2w_grid:shape"],
+                1,
+            )
             self.assertFalse((root / "data" / "processed").exists())
+
+    def test_accepts_one_t2w_compatible_mask_among_alternate_grids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            raw_root = create_preprocessing_fixture(root)
+            write_nifti_header(
+                raw_root / "picai_labels" / "anatomical_delineations" / "10000_1000000_adc_grid.nii.gz",
+                shape=(2, 3, 6),
+                spacing=(2.0, 2.0, 3.0),
+            )
+            manifest_path = root / "data" / "interim" / "picai_manifest.csv"
+            write_manifest(
+                manifest_path,
+                gland_mask=(
+                    "picai_labels/anatomical_delineations/10000_1000000.nii.gz|"
+                    "picai_labels/anatomical_delineations/10000_1000000_adc_grid.nii.gz"
+                ),
+            )
+
+            report = validate_preprocessing_inputs(
+                manifest_path=manifest_path,
+                raw_root=raw_root,
+                sample_size=1,
+            )
+
+            self.assertEqual(report["summary"]["cases_with_blocking_issues"], 0)
+            gland_masks = report["cases"][0]["masks"]["gland"]
+            self.assertEqual(
+                [mask["alignment_to_t2w"] for mask in gland_masks],
+                ["t2w_compatible", "different_grid"],
+            )
 
 
 def create_preprocessing_fixture(
@@ -108,7 +146,10 @@ def create_preprocessing_fixture(
     return raw_root
 
 
-def write_manifest(path: Path) -> None:
+def write_manifest(
+    path: Path,
+    gland_mask: str = "picai_labels/anatomical_delineations/10000_1000000.nii.gz",
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as csv_file:
         writer = csv.DictWriter(
@@ -131,7 +172,7 @@ def write_manifest(path: Path) -> None:
                 "path_t2w": "images/fold0/10000_1000000_t2w.mha",
                 "path_adc": "images/fold0/10000_1000000_adc.mha",
                 "path_hbv": "images/fold0/10000_1000000_hbv.mha",
-                "path_gland_mask": "picai_labels/anatomical_delineations/10000_1000000.nii.gz",
+                "path_gland_mask": gland_mask,
                 "path_lesion_mask": "picai_labels/csPCa_lesion_delineations/10000_1000000.nii.gz",
             }
         )

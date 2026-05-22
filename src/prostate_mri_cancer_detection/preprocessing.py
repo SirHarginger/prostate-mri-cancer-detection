@@ -135,6 +135,8 @@ def validate_case_row(row: dict[str, str], raw_root: Path) -> dict[str, Any]:
         "modalities": {},
         "masks": {},
         "checks": {},
+        "resampling_required": [],
+        "blocking_issues": [],
         "issues": [],
     }
 
@@ -144,38 +146,58 @@ def validate_case_row(row: dict[str, str], raw_root: Path) -> dict[str, Any]:
         modality_metadata[modality] = metadata
         case_report["modalities"][modality] = asdict(metadata)
         if not row.get(column, ""):
-            case_report["issues"].append(f"missing_manifest_path_{modality}")
+            case_report["blocking_issues"].append(f"missing_manifest_path_{modality}")
         elif not Path(metadata.path).exists():
-            case_report["issues"].append(f"missing_file_{modality}")
+            case_report["blocking_issues"].append(f"missing_file_{modality}")
         elif not metadata.readable:
-            case_report["issues"].append(f"unreadable_header_{modality}")
+            case_report["blocking_issues"].append(f"unreadable_header_{modality}")
 
     reference = modality_metadata["t2w"]
+    case_report["modalities"]["t2w"]["alignment_to_t2w"] = "reference"
+    case_report["modalities"]["t2w"]["mismatched_fields"] = []
     for modality in ("adc", "hbv"):
         issue_fields = compare_metadata(reference, modality_metadata[modality])
-        for field in issue_fields:
-            case_report["issues"].append(f"{modality}_{field}_mismatch")
+        case_report["modalities"][modality]["mismatched_fields"] = issue_fields
+        if issue_fields:
+            case_report["modalities"][modality]["alignment_to_t2w"] = "requires_resampling"
+            case_report["resampling_required"].append(
+                f"{modality}_to_t2w_grid:{','.join(issue_fields)}"
+            )
+        else:
+            case_report["modalities"][modality]["alignment_to_t2w"] = "already_aligned"
 
     for mask_name, column in MASK_PATH_COLUMNS.items():
         mask_reports = []
         mask_paths = split_pipe_value(row.get(column, ""))
         if not mask_paths:
-            case_report["issues"].append(f"missing_manifest_path_{mask_name}_mask")
+            case_report["blocking_issues"].append(f"missing_manifest_path_{mask_name}_mask")
+        readable_mask_count = 0
+        t2w_compatible_mask_count = 0
         for index, mask_path in enumerate(mask_paths):
             metadata = metadata_from_manifest_value(mask_path, raw_root)
             mask_report = asdict(metadata)
             mask_report["index"] = index
+            mask_report["mismatched_fields"] = []
+            mask_report["alignment_to_t2w"] = "unreadable"
             mask_reports.append(mask_report)
             if not Path(metadata.path).exists():
-                case_report["issues"].append(f"missing_file_{mask_name}_mask")
+                case_report["blocking_issues"].append(f"missing_file_{mask_name}_mask")
             elif not metadata.readable:
-                case_report["issues"].append(f"unreadable_header_{mask_name}_mask")
+                case_report["blocking_issues"].append(f"unreadable_header_{mask_name}_mask")
             else:
+                readable_mask_count += 1
                 issue_fields = compare_metadata(reference, metadata, compare_direction=False)
-                for field in issue_fields:
-                    case_report["issues"].append(f"{mask_name}_mask_{field}_mismatch")
+                mask_report["mismatched_fields"] = issue_fields
+                if issue_fields:
+                    mask_report["alignment_to_t2w"] = "different_grid"
+                else:
+                    mask_report["alignment_to_t2w"] = "t2w_compatible"
+                    t2w_compatible_mask_count += 1
         case_report["masks"][mask_name] = mask_reports
+        if readable_mask_count and not t2w_compatible_mask_count:
+            case_report["blocking_issues"].append(f"no_t2w_compatible_{mask_name}_mask")
 
+    case_report["issues"] = list(case_report["blocking_issues"])
     case_report["checks"] = {
         "all_target_modality_paths_resolve": all(
             Path(metadata.path).exists() for metadata in modality_metadata.values()
@@ -183,15 +205,12 @@ def validate_case_row(row: dict[str, str], raw_root: Path) -> dict[str, Any]:
         "all_target_modality_headers_readable": all(
             metadata.readable for metadata in modality_metadata.values()
         ),
-        "target_modalities_align_with_t2w": not any(
-            issue.endswith("_mismatch")
-            and (issue.startswith("adc_") or issue.startswith("hbv_"))
-            for issue in case_report["issues"]
+        "target_modalities_align_with_t2w": not case_report["resampling_required"],
+        "target_modalities_need_resampling_to_t2w": bool(case_report["resampling_required"]),
+        "masks_have_t2w_compatible_candidate": not any(
+            issue.startswith("no_t2w_compatible_") for issue in case_report["blocking_issues"]
         ),
-        "masks_align_with_t2w_where_readable": not any(
-            issue.startswith("gland_mask_") or issue.startswith("lesion_mask_")
-            for issue in case_report["issues"]
-        ),
+        "has_blocking_issues": bool(case_report["blocking_issues"]),
     }
     return case_report
 
@@ -389,10 +408,15 @@ def build_preprocessing_report(
 ) -> dict[str, Any]:
     """Build the Stage 2 preprocessing validation report."""
 
-    issue_counter: Counter[str] = Counter(
+    blocking_counter: Counter[str] = Counter(
         issue
         for case_report in case_reports
-        for issue in case_report["issues"]
+        for issue in case_report["blocking_issues"]
+    )
+    resampling_counter: Counter[str] = Counter(
+        item
+        for case_report in case_reports
+        for item in case_report["resampling_required"]
     )
     modality_readable_counts = {
         modality: sum(
@@ -407,6 +431,17 @@ def build_preprocessing_report(
             1
             for case_report in case_reports
             if any(mask_report["readable"] for mask_report in case_report["masks"][mask_name])
+        )
+        for mask_name in MASK_PATH_COLUMNS
+    }
+    mask_t2w_compatible_counts = {
+        mask_name: sum(
+            1
+            for case_report in case_reports
+            if any(
+                mask_report["alignment_to_t2w"] == "t2w_compatible"
+                for mask_report in case_report["masks"][mask_name]
+            )
         )
         for mask_name in MASK_PATH_COLUMNS
     }
@@ -425,10 +460,20 @@ def build_preprocessing_report(
         "roi_plan": DEFAULT_ROI_PLAN,
         "summary": {
             "cases_checked": len(case_reports),
-            "cases_with_issues": sum(1 for case_report in case_reports if case_report["issues"]),
-            "issue_counts": dict(sorted(issue_counter.items())),
+            "cases_with_issues": sum(
+                1 for case_report in case_reports if case_report["blocking_issues"]
+            ),
+            "cases_with_blocking_issues": sum(
+                1 for case_report in case_reports if case_report["blocking_issues"]
+            ),
+            "cases_requiring_resampling": sum(
+                1 for case_report in case_reports if case_report["resampling_required"]
+            ),
+            "issue_counts": dict(sorted(blocking_counter.items())),
+            "resampling_required_counts": dict(sorted(resampling_counter.items())),
             "modality_headers_readable": modality_readable_counts,
             "mask_headers_readable": mask_readable_counts,
+            "mask_t2w_compatible_cases": mask_t2w_compatible_counts,
         },
         "cases": case_reports,
     }

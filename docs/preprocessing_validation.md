@@ -39,11 +39,21 @@ Reports are written under `outputs/reports`, which is ignored by Git.
 
 - T2W, ADC, and high b-value DWI paths resolve from the manifest.
 - Target modality headers are readable without voxel loading.
+- T2W is treated as the initial reference grid for paired validation.
 - ADC and high b-value DWI shape, spacing, and direction are compared with T2W
-  where metadata are available.
+  where metadata are available; differences are reported as resampling
+  requirements, not raw-data failures.
 - Gland and lesion mask paths resolve where present.
-- Mask shape and spacing are compared with T2W where mask headers are readable.
-- Missing paths, unreadable headers, and mismatches are reported per case.
+- Mask shape and spacing are compared with T2W where mask headers are readable;
+  a case passes mask readiness when at least one mask candidate is T2W-grid
+  compatible.
+- Missing paths, unreadable headers, and lack of a T2W-compatible mask
+  candidate are reported as blocking issues.
+
+The PI-CAI files may contain multiple mask variants per case. The validator
+keeps every candidate in the report, marks each as `t2w_compatible` or
+`different_grid`, and avoids treating alternate-grid masks as failures when a
+T2W-compatible candidate is available.
 
 ## Normalization Plan
 
@@ -51,6 +61,9 @@ No normalization is applied in Stage 2. The report records the planned default:
 per-case and per-modality percentile clipping followed by z-score
 normalization, preferably inside the prostate gland ROI when available.
 Dataset-level statistics must not be computed across validation or test folds.
+ADC and high b-value DWI should be resampled or otherwise paired with the T2W
+grid only in a later preprocessing implementation after this validation stage
+confirms the policy.
 
 ## ROI Plan
 
