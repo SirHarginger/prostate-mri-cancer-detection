@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from prostate_mri_cancer_detection.cnn import run_cnn_smoke_training
 from prostate_mri_cancer_detection.data import build_and_write_manifest
 from prostate_mri_cancer_detection.evaluation import (
     generate_evaluation_report,
@@ -499,6 +500,117 @@ def build_parser() -> argparse.ArgumentParser:
     )
     radiomics_cv_parser.set_defaults(func=run_radiomics_cv)
 
+    cnn_parser = subparsers.add_parser(
+        "cnn-smoke-train",
+        help="Run a tiny split-safe multisequence CNN smoke training pass.",
+    )
+    cnn_parser.add_argument(
+        "--manifest",
+        default="data/interim/picai_manifest.csv",
+        type=Path,
+        help="Stage 1 manifest CSV path.",
+    )
+    cnn_parser.add_argument(
+        "--raw-root",
+        default="data/raw/picai",
+        type=Path,
+        help="Path to the local PI-CAI raw root.",
+    )
+    cnn_parser.add_argument(
+        "--embeddings",
+        default="data/features/cnn_smoke_embeddings.csv",
+        type=Path,
+        help="CNN smoke embedding table output path.",
+    )
+    cnn_parser.add_argument(
+        "--predictions",
+        default="outputs/reports/cnn_smoke_predictions.csv",
+        type=Path,
+        help="CNN smoke prediction CSV output path.",
+    )
+    cnn_parser.add_argument(
+        "--report",
+        default="outputs/reports/cnn_smoke_report.json",
+        type=Path,
+        help="CNN smoke report JSON output path.",
+    )
+    cnn_parser.add_argument(
+        "--model",
+        default="outputs/models/cnn_smoke_model.pt",
+        type=Path,
+        help="Ignored smoke-model checkpoint output path.",
+    )
+    cnn_parser.add_argument(
+        "--sample-size-per-split",
+        default=12,
+        type=int,
+        help="Balanced cases per split for smoke training when --all-cases is not used.",
+    )
+    cnn_parser.add_argument(
+        "--case-id",
+        action="append",
+        default=[],
+        help="Specific case ID to include. Can be provided multiple times.",
+    )
+    cnn_parser.add_argument(
+        "--all-cases",
+        action="store_true",
+        help="Use all manifest cases. Intended for later training, not the first smoke run.",
+    )
+    cnn_parser.add_argument(
+        "--image-size",
+        default=64,
+        type=int,
+        help="Square 2D crop size for CNN input.",
+    )
+    cnn_parser.add_argument(
+        "--max-epochs",
+        default=1,
+        type=int,
+        help="Number of smoke-training epochs.",
+    )
+    cnn_parser.add_argument(
+        "--batch-size",
+        default=4,
+        type=int,
+        help="Mini-batch size.",
+    )
+    cnn_parser.add_argument(
+        "--learning-rate",
+        default=1e-3,
+        type=float,
+        help="Adam learning rate.",
+    )
+    cnn_parser.add_argument(
+        "--embedding-dim",
+        default=32,
+        type=int,
+        help="CNN embedding dimension.",
+    )
+    cnn_parser.add_argument(
+        "--augment-train",
+        action="store_true",
+        help="Apply deterministic augmentation to training rows only.",
+    )
+    cnn_parser.add_argument(
+        "--target-sensitivity",
+        default=0.90,
+        type=float,
+        help="Target sensitivity for report diagnostics.",
+    )
+    cnn_parser.add_argument(
+        "--seed",
+        default=42,
+        type=int,
+        help="Random seed.",
+    )
+    cnn_parser.add_argument(
+        "--device",
+        default="cpu",
+        help="Torch device, for example cpu, cuda, or auto.",
+    )
+    cnn_parser.set_defaults(func=run_cnn_smoke)
+
     evaluation_parser = subparsers.add_parser(
         "evaluation-report",
         help="Generate Stage 6 metrics and error-analysis reports from predictions.",
@@ -816,6 +928,43 @@ def run_radiomics_cv(args: argparse.Namespace) -> int:
         "Validation-selected fixed sensitivity: "
         f"status={fixed['status']} metrics={fixed.get('metrics')}"
     )
+    return 0
+
+
+def run_cnn_smoke(args: argparse.Namespace) -> int:
+    """Run CNN smoke training."""
+
+    report = run_cnn_smoke_training(
+        manifest_path=args.manifest,
+        raw_root=args.raw_root,
+        embeddings_path=args.embeddings,
+        predictions_path=args.predictions,
+        report_path=args.report,
+        model_path=args.model,
+        sample_size_per_split=args.sample_size_per_split,
+        image_size=args.image_size,
+        max_epochs=args.max_epochs,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        embedding_dim=args.embedding_dim,
+        augment_train=args.augment_train,
+        all_cases=args.all_cases,
+        case_ids=args.case_id,
+        target_sensitivity=args.target_sensitivity,
+        seed=args.seed,
+        device_name=args.device,
+    )
+
+    print(f"Wrote CNN smoke embeddings: {args.embeddings}")
+    print(f"Wrote CNN smoke predictions: {args.predictions}")
+    print(f"Wrote CNN smoke report: {args.report}")
+    print(f"Wrote CNN smoke model: {args.model}")
+    print(f"Summary: {report['summary']}")
+    print(f"Case counts: {report['case_counts']}")
+    print(f"Label counts: {report['label_counts']}")
+    for split, payload in report["metrics"].items():
+        metrics = payload["metrics"]
+        print(f"{split}: n={metrics['n']} auc={metrics['roc_auc']} sens={metrics['sensitivity']} spec={metrics['specificity']}")
     return 0
 
 
