@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from prostate_mri_cancer_detection.preprocessing import validate_resampling_plan
+from prostate_mri_cancer_detection.preprocessing import validate_resampling_plan, write_preprocessed_sample
 
 
 try:
@@ -38,6 +38,47 @@ class ResamplingValidationTests(unittest.TestCase):
             self.assertEqual(report["summary"]["gland_cases_with_reference_grid_mask"], 1)
             self.assertEqual(report["summary"]["lesion_cases_with_reference_grid_mask"], 1)
             self.assertFalse((root / "data" / "processed").exists())
+
+    def test_writes_tiny_preprocessed_sample_outside_raw(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            raw_root = create_resampling_fixture(root)
+            manifest = write_manifest(root)
+            output_root = root / "data" / "processed" / "picai_sample"
+            report_path = root / "outputs" / "reports" / "preprocessed_sample.json"
+
+            report = write_preprocessed_sample(
+                manifest_path=manifest,
+                raw_root=raw_root,
+                output_root=output_root,
+                report_path=report_path,
+                sample_size=1,
+            )
+
+            self.assertTrue(report_path.exists())
+            self.assertEqual(report["summary"]["cases_with_issues"], 0)
+            self.assertEqual(report["summary"]["adc_written"], 1)
+            self.assertEqual(report["summary"]["hbv_written"], 1)
+            self.assertEqual(report["summary"]["adc_matches_reference"], 1)
+            self.assertEqual(report["summary"]["hbv_matches_reference"], 1)
+            case_dir = output_root / "10000_1000000"
+            self.assertTrue((case_dir / "10000_1000000_adc_to_t2w.mha").exists())
+            self.assertTrue((case_dir / "10000_1000000_hbv_to_t2w.mha").exists())
+
+    def test_refuses_to_write_preprocessed_sample_inside_raw_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            raw_root = create_resampling_fixture(root)
+            manifest = write_manifest(root)
+
+            with self.assertRaises(ValueError):
+                write_preprocessed_sample(
+                    manifest_path=manifest,
+                    raw_root=raw_root,
+                    output_root=raw_root / "processed",
+                    report_path=root / "outputs" / "reports" / "preprocessed_sample.json",
+                    sample_size=1,
+                )
 
 
 def create_resampling_fixture(root: Path) -> Path:

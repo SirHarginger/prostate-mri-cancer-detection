@@ -10,7 +10,11 @@ from prostate_mri_cancer_detection.evaluation import generate_evaluation_report,
 from prostate_mri_cancer_detection.explainability import generate_explainability_report
 from prostate_mri_cancer_detection.features import extract_radiomics_features
 from prostate_mri_cancer_detection.modeling import extract_embedding_table
-from prostate_mri_cancer_detection.preprocessing import validate_preprocessing_inputs, validate_resampling_plan
+from prostate_mri_cancer_detection.preprocessing import (
+    validate_preprocessing_inputs,
+    validate_resampling_plan,
+    write_preprocessed_sample,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -123,6 +127,48 @@ def build_parser() -> argparse.ArgumentParser:
         help="JSON resampling validation report output path.",
     )
     resampling_parser.set_defaults(func=run_resampling_validate)
+
+    sample_parser = subparsers.add_parser(
+        "preprocess-sample",
+        help="Write a tiny SimpleITK ADC/HBV-to-T2W processed sample for inspection.",
+    )
+    sample_parser.add_argument(
+        "--manifest",
+        default="data/interim/picai_manifest.csv",
+        type=Path,
+        help="Stage 1 manifest CSV path.",
+    )
+    sample_parser.add_argument(
+        "--raw-root",
+        default="data/raw/picai",
+        type=Path,
+        help="Path to the local PI-CAI raw root.",
+    )
+    sample_parser.add_argument(
+        "--output-root",
+        default="data/processed/picai_sample",
+        type=Path,
+        help="Ignored output root for tiny processed sample.",
+    )
+    sample_parser.add_argument(
+        "--report",
+        default="outputs/reports/preprocessed_sample_report.json",
+        type=Path,
+        help="JSON report/provenance path.",
+    )
+    sample_parser.add_argument(
+        "--sample-size",
+        default=5,
+        type=int,
+        help="Number of sorted manifest cases to write when --case-id is not used.",
+    )
+    sample_parser.add_argument(
+        "--case-id",
+        action="append",
+        default=[],
+        help="Specific case ID to write. Can be provided multiple times.",
+    )
+    sample_parser.set_defaults(func=run_preprocess_sample)
 
     radiomics_parser = subparsers.add_parser(
         "radiomics-extract",
@@ -449,6 +495,30 @@ def run_resampling_validate(args: argparse.Namespace) -> int:
     print(f"Cases with issues: {summary['cases_with_issues']}")
     print(f"ADC resampled matches reference: {summary['adc_resampled_matches_reference']}")
     print(f"HBV resampled matches reference: {summary['hbv_resampled_matches_reference']}")
+    print(f"Gland reference-grid masks: {summary['gland_cases_with_reference_grid_mask']}")
+    print(f"Lesion reference-grid masks: {summary['lesion_cases_with_reference_grid_mask']}")
+    return 0
+
+
+def run_preprocess_sample(args: argparse.Namespace) -> int:
+    """Write a tiny processed sample for inspection."""
+
+    report = write_preprocessed_sample(
+        manifest_path=args.manifest,
+        raw_root=args.raw_root,
+        output_root=args.output_root,
+        report_path=args.report,
+        sample_size=args.sample_size,
+        case_ids=args.case_id,
+    )
+    summary = report["summary"]
+
+    print(f"Wrote preprocessed sample report: {args.report}")
+    print(f"Output root: {args.output_root}")
+    print(f"Cases requested: {summary['cases_requested']}")
+    print(f"Cases with issues: {summary['cases_with_issues']}")
+    print(f"ADC written/matched: {summary['adc_written']}/{summary['adc_matches_reference']}")
+    print(f"HBV written/matched: {summary['hbv_written']}/{summary['hbv_matches_reference']}")
     print(f"Gland reference-grid masks: {summary['gland_cases_with_reference_grid_mask']}")
     print(f"Lesion reference-grid masks: {summary['lesion_cases_with_reference_grid_mask']}")
     return 0

@@ -138,6 +138,158 @@ def validate_resampling_plan(
     return report
 
 
+def write_preprocessed_sample(
+    manifest_path: str | Path,
+    raw_root: str | Path,
+    output_root: str | Path,
+    report_path: str | Path,
+    sample_size: int = 5,
+    case_ids: Iterable[str] | None = None,
+) -> dict[str, Any]:
+    """Write a tiny inspected sample of ADC/HBV resampled to T2W grid."""
+
+    try:
+        import SimpleITK as sitk
+    except ImportError as error:  # pragma: no cover - exercised on systems without SimpleITK.
+        raise RuntimeError("SimpleITK is required for preprocessing sample writing") from error
+
+    manifest_path = Path(manifest_path)
+    raw_root = Path(raw_root)
+    output_root = Path(output_root)
+    ensure_output_not_inside_raw(output_root, raw_root)
+
+    rows = select_manifest_rows(
+        load_manifest_rows(manifest_path),
+        sample_size=sample_size,
+        case_ids=case_ids,
+    )
+    case_reports = [
+        write_case_preprocessed_sample(row=row, raw_root=raw_root, output_root=output_root, sitk=sitk)
+        for row in rows
+    ]
+    report = {
+        "schema_version": "1.0",
+        "stage": "preprocessed_sample_writer",
+        "manifest_path": str(manifest_path),
+        "raw_root": str(raw_root),
+        "output_root": str(output_root),
+        "sample_size_requested": sample_size,
+        "selected_case_ids": [row.get("case_id", "") for row in rows],
+        "write_policy": {
+            "processed_outputs": ["adc_resampled_to_t2w", "hbv_resampled_to_t2w"],
+            "reference_t2w": "not copied; raw path recorded",
+            "masks": "not copied; reference-grid candidates recorded",
+            "image_interpolator": "linear",
+            "mask_interpolator": "not applied in this stage",
+        },
+        "summary": summarize_preprocessed_sample_cases(case_reports),
+        "cases": case_reports,
+    }
+    write_preprocessing_report(report, report_path)
+    return report
+
+
+def write_case_preprocessed_sample(row: dict[str, str], raw_root: Path, output_root: Path, sitk: Any) -> dict[str, Any]:
+    """Write resampled ADC/HBV outputs for one case."""
+
+    case_id = row.get("case_id", "")
+    case_output_root = output_root / case_id
+    t2w_path = resolve_manifest_path(row.get("path_t2w", ""), raw_root)
+    case_report: dict[str, Any] = {
+        "case_id": case_id,
+        "fold": row.get("fold", ""),
+        "output_dir": str(case_output_root),
+        "reference_t2w_path": str(t2w_path),
+        "outputs": {},
+        "masks": {},
+        "issues": [],
+    }
+
+    try:
+        reference = sitk.ReadImage(str(t2w_path))
+    except Exception as error:  # noqa: BLE001 - per-case errors belong in report.
+        case_report["issues"].append(f"unreadable_t2w:{type(error).__name__}: {error}")
+        return case_report
+
+    reference_signature = simpleitk_signature(reference)
+    case_report["reference_signature"] = reference_signature
+    case_output_root.mkdir(parents=True, exist_ok=True)
+
+    for modality, column in (("adc", "path_adc"), ("hbv", "path_hbv")):
+        moving_path = resolve_manifest_path(row.get(column, ""), raw_root)
+        output_path = case_output_root / f"{case_id}_{modality}_to_t2w.mha"
+        output_report: dict[str, Any] = {
+            "source_path": str(moving_path),
+            "output_path": str(output_path),
+            "written": False,
+            "native_signature": {},
+            "output_signature": {},
+            "matches_reference": False,
+            "error": "",
+        }
+        try:
+            moving = sitk.ReadImage(str(moving_path))
+            output_report["native_signature"] = simpleitk_signature(moving)
+            resampled = resample_to_reference(moving, reference, sitk.sitkLinear, sitk)
+            sitk.WriteImage(resampled, str(output_path))
+            written = sitk.ReadImage(str(output_path))
+            output_report["written"] = output_path.exists()
+            output_report["output_signature"] = simpleitk_signature(written)
+            output_report["matches_reference"] = signatures_match(
+                output_report["output_signature"],
+                reference_signature,
+            )
+            if not output_report["matches_reference"]:
+                case_report["issues"].append(f"{modality}_written_grid_mismatch")
+        except Exception as error:  # noqa: BLE001 - per-output failure belongs in report.
+            output_report["error"] = f"{type(error).__name__}: {error}"
+            case_report["issues"].append(f"{modality}_write_failed")
+        case_report["outputs"][modality] = output_report
+
+    for mask_name, column in MASK_PATH_COLUMNS.items():
+        case_report["masks"][mask_name] = validate_mask_candidates(
+            mask_paths=split_pipe_value(row.get(column, "")),
+            raw_root=raw_root,
+            reference=reference,
+            reference_signature=reference_signature,
+            sitk=sitk,
+        )
+    return case_report
+
+
+def ensure_output_not_inside_raw(output_root: Path, raw_root: Path) -> None:
+    """Prevent accidental writes inside raw medical imaging data."""
+
+    try:
+        output_root.resolve().relative_to(raw_root.resolve())
+    except ValueError:
+        return
+    raise ValueError(f"Refusing to write processed outputs inside raw_root: {output_root}")
+
+
+def summarize_preprocessed_sample_cases(case_reports: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize written preprocessed sample outputs."""
+
+    return {
+        "cases_requested": len(case_reports),
+        "cases_with_issues": sum(1 for report in case_reports if report["issues"]),
+        "adc_written": sum(1 for report in case_reports if report.get("outputs", {}).get("adc", {}).get("written")),
+        "hbv_written": sum(1 for report in case_reports if report.get("outputs", {}).get("hbv", {}).get("written")),
+        "adc_matches_reference": sum(
+            1 for report in case_reports if report.get("outputs", {}).get("adc", {}).get("matches_reference")
+        ),
+        "hbv_matches_reference": sum(
+            1 for report in case_reports if report.get("outputs", {}).get("hbv", {}).get("matches_reference")
+        ),
+        "gland_cases_with_reference_grid_mask": sum(
+            1 for report in case_reports if report.get("masks", {}).get("gland", {}).get("has_reference_grid_candidate")
+        ),
+        "lesion_cases_with_reference_grid_mask": sum(
+            1 for report in case_reports if report.get("masks", {}).get("lesion", {}).get("has_reference_grid_candidate")
+        ),
+    }
+
+
 def validate_case_resampling_plan(row: dict[str, str], raw_root: Path, sitk: Any) -> dict[str, Any]:
     """Validate one case's ADC/HBV resampling against its T2W reference."""
 
