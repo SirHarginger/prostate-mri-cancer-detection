@@ -7,6 +7,7 @@ from pathlib import Path
 
 from prostate_mri_cancer_detection.data import build_and_write_manifest
 from prostate_mri_cancer_detection.features import extract_radiomics_features
+from prostate_mri_cancer_detection.modeling import extract_embedding_table
 from prostate_mri_cancer_detection.preprocessing import validate_preprocessing_inputs
 
 
@@ -155,6 +156,82 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reproducible extraction settings JSON path.",
     )
     radiomics_parser.set_defaults(func=run_radiomics_extract)
+
+    embedding_parser = subparsers.add_parser(
+        "embedding-extract",
+        help="Extract Stage 4 split-safe prototype embeddings with provenance.",
+    )
+    embedding_parser.add_argument(
+        "--manifest",
+        default="data/interim/picai_manifest.csv",
+        type=Path,
+        help="Stage 1 manifest CSV path.",
+    )
+    embedding_parser.add_argument(
+        "--preprocessing-report",
+        default="outputs/reports/preprocessing_fold_sample_validation.json",
+        type=Path,
+        help="Stage 2 report used to choose the same validated sample when available.",
+    )
+    embedding_parser.add_argument(
+        "--raw-root",
+        default="data/raw/picai",
+        type=Path,
+        help="Path to the local PI-CAI raw root.",
+    )
+    embedding_parser.add_argument(
+        "--sequence",
+        default="t2w",
+        choices=["t2w"],
+        help="Sequence for prototype embeddings. ADC/HBV wait for resampling.",
+    )
+    embedding_parser.add_argument(
+        "--embedding-dim",
+        default=32,
+        type=int,
+        help="Number of embedding columns to write.",
+    )
+    embedding_parser.add_argument(
+        "--sample-size-per-split",
+        default=5,
+        type=int,
+        help="Cases per split when no preprocessing selected-case list is used.",
+    )
+    embedding_parser.add_argument(
+        "--case-id",
+        action="append",
+        default=[],
+        help="Specific case ID to extract. Can be provided multiple times.",
+    )
+    embedding_parser.add_argument(
+        "--all-cases",
+        action="store_true",
+        help="Extract all manifest cases. Use only after sample validation succeeds.",
+    )
+    embedding_parser.add_argument(
+        "--augment-train",
+        action="store_true",
+        help="Apply deterministic train-only intensity perturbation for leakage checks.",
+    )
+    embedding_parser.add_argument(
+        "--output",
+        default="data/features/embeddings_t2w_prototype_sample.csv",
+        type=Path,
+        help="Embedding table output path.",
+    )
+    embedding_parser.add_argument(
+        "--provenance",
+        default="outputs/reports/embeddings_t2w_prototype_provenance.json",
+        type=Path,
+        help="Embedding provenance JSON path.",
+    )
+    embedding_parser.add_argument(
+        "--report",
+        default="outputs/reports/embeddings_t2w_prototype_report.json",
+        type=Path,
+        help="Embedding extraction validation report path.",
+    )
+    embedding_parser.set_defaults(func=run_embedding_extract)
     return parser
 
 
@@ -226,6 +303,35 @@ def run_radiomics_extract(args: argparse.Namespace) -> int:
     print(f"Cases requested: {summary['cases_requested']}")
     print(f"Features written: {summary['features_written']}")
     print(f"Failures written: {summary['failures_written']}")
+    return 0
+
+
+def run_embedding_extract(args: argparse.Namespace) -> int:
+    """Run Stage 4 prototype embedding extraction."""
+
+    summary = extract_embedding_table(
+        manifest_path=args.manifest,
+        raw_root=args.raw_root,
+        output_path=args.output,
+        provenance_path=args.provenance,
+        report_path=args.report,
+        preprocessing_report_path=args.preprocessing_report,
+        sequence=args.sequence,
+        embedding_dim=args.embedding_dim,
+        sample_size_per_split=args.sample_size_per_split,
+        case_ids=args.case_id,
+        all_cases=args.all_cases,
+        augment_train=args.augment_train,
+    )
+
+    print(f"Wrote embedding table: {args.output}")
+    print(f"Wrote embedding provenance: {args.provenance}")
+    print(f"Wrote embedding report: {args.report}")
+    print(f"Embeddings written: {summary['embeddings_written']}")
+    print(f"Failures: {summary['failures']}")
+    print(f"Embeddings by split: {summary['embeddings_by_split']}")
+    print(f"Augmentation by split: {summary['augmentation_by_split']}")
+    print(f"Validation/test augmented rows: {summary['validation_or_test_augmented_rows']}")
     return 0
 
 
