@@ -7,6 +7,7 @@ from pathlib import Path
 
 from prostate_mri_cancer_detection.data import build_and_write_manifest
 from prostate_mri_cancer_detection.evaluation import generate_evaluation_report, run_feature_baselines
+from prostate_mri_cancer_detection.explainability import generate_explainability_report
 from prostate_mri_cancer_detection.features import extract_radiomics_features
 from prostate_mri_cancer_detection.modeling import extract_embedding_table
 from prostate_mri_cancer_detection.preprocessing import validate_preprocessing_inputs
@@ -305,6 +306,48 @@ def build_parser() -> argparse.ArgumentParser:
         help="Target sensitivity for fixed-sensitivity analysis.",
     )
     evaluation_parser.set_defaults(func=run_evaluation_report)
+
+    explainability_parser = subparsers.add_parser(
+        "explainability-report",
+        help="Generate Stage 7 prototype feature-importance reports.",
+    )
+    explainability_parser.add_argument(
+        "--manifest",
+        default="data/interim/picai_manifest.csv",
+        type=Path,
+        help="Stage 1 manifest CSV path.",
+    )
+    explainability_parser.add_argument(
+        "--radiomics",
+        default="data/features/radiomics_t2w_gland_sample.csv",
+        type=Path,
+        help="Radiomics feature table path.",
+    )
+    explainability_parser.add_argument(
+        "--embeddings",
+        default="data/features/embeddings_t2w_prototype_sample_all25.csv",
+        type=Path,
+        help="Embedding table path.",
+    )
+    explainability_parser.add_argument(
+        "--json-report",
+        default="outputs/reports/prototype_explainability_report.json",
+        type=Path,
+        help="Structured explainability JSON report path.",
+    )
+    explainability_parser.add_argument(
+        "--csv-report",
+        default="outputs/reports/prototype_feature_importance.csv",
+        type=Path,
+        help="Feature-importance CSV report path.",
+    )
+    explainability_parser.add_argument(
+        "--top-n",
+        default=20,
+        type=int,
+        help="Number of top features per baseline to report.",
+    )
+    explainability_parser.set_defaults(func=run_explainability_report)
     return parser
 
 
@@ -446,6 +489,27 @@ def run_evaluation_report(args: argparse.Namespace) -> int:
     print(f"Prediction rows summarized: {report['total_prediction_rows']}")
     for baseline, splits in report["baselines"].items():
         print(f"{baseline}: {sorted(splits)}")
+    return 0
+
+
+def run_explainability_report(args: argparse.Namespace) -> int:
+    """Run Stage 7 prototype explainability report generation."""
+
+    report = generate_explainability_report(
+        manifest_path=args.manifest,
+        radiomics_path=args.radiomics,
+        embeddings_path=args.embeddings,
+        output_json_path=args.json_report,
+        output_csv_path=args.csv_report,
+        top_n=args.top_n,
+    )
+
+    print(f"Wrote explainability JSON report: {args.json_report}")
+    print(f"Wrote feature-importance CSV: {args.csv_report}")
+    print(f"Aligned cases: {report['aligned_cases']}")
+    print(f"CNN visual explanation: {report['cnn_visual_explanation']['status']}")
+    for baseline, payload in report["importances"].items():
+        print(f"{baseline}: {payload['status']} top_features={len(payload['top_features'])}")
     return 0
 
 
