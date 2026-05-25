@@ -20,10 +20,14 @@ from typing import Any, Iterable
 
 from prostate_mri_cancer_detection.preprocessing import (
     floats_close,
+    image_has_positive_voxels,
     parse_metaimage_header,
     read_image_metadata,
     read_nifti_header_bytes,
+    resample_to_reference,
     resolve_manifest_path,
+    signatures_match,
+    simpleitk_signature,
     split_pipe_value,
 )
 
@@ -57,6 +61,30 @@ FEATURE_COLUMNS = [
     "intensity_entropy_32bin",
 ]
 FAILURE_COLUMNS = ["case_id", "fold", "sequence", "roi", "reason", "image_path", "mask_path"]
+FULL_GLAND_SEQUENCES = ("t2w", "adc", "hbv")
+FULL_GLAND_SEQUENCE_PATH_COLUMNS = {
+    "t2w": "path_t2w",
+    "adc": "path_adc",
+    "hbv": "path_hbv",
+}
+FULL_GLAND_METADATA_COLUMNS = [
+    "case_id",
+    "fold",
+    "label_cspca",
+    "path_t2w",
+    "path_adc",
+    "path_hbv",
+    "path_gland_mask",
+]
+FULL_GLAND_FAILURE_COLUMNS = [
+    "case_id",
+    "fold",
+    "reason",
+    "path_t2w",
+    "path_adc",
+    "path_hbv",
+    "path_gland_mask",
+]
 
 ARRAY_TYPES = {
     "MET_UCHAR": ("B", 1),
@@ -183,6 +211,82 @@ def extract_radiomics_features(
     }
 
 
+def extract_full_gland_multisequence_radiomics(
+    manifest_path: str | Path,
+    raw_root: str | Path,
+    output_path: str | Path,
+    failure_log_path: str | Path,
+    settings_path: str | Path,
+    sample_size: int = 25,
+    case_ids: Iterable[str] | None = None,
+    all_cases: bool = False,
+) -> dict[str, Any]:
+    """Extract full whole-gland T2W + resampled ADC/HBV first-order radiomics."""
+
+    try:
+        import SimpleITK as sitk
+    except ImportError as error:  # pragma: no cover - exercised on systems without SimpleITK.
+        raise RuntimeError("SimpleITK is required for full multisequence radiomics") from error
+
+    manifest_path = Path(manifest_path)
+    raw_root = Path(raw_root)
+    rows = load_manifest_rows(manifest_path)
+    selected_case_ids = select_case_ids(
+        rows=rows,
+        preprocessing_report=None,
+        sample_size=sample_size,
+        case_ids=case_ids,
+        all_cases=all_cases,
+    )
+    rows_by_case = {row.get("case_id", ""): row for row in rows}
+
+    feature_rows: list[dict[str, str]] = []
+    failure_rows: list[dict[str, str]] = []
+    for case_id in selected_case_ids:
+        row = rows_by_case.get(case_id)
+        if row is None:
+            failure_rows.append(full_gland_failure_row(case_id, "", "case_id_not_in_manifest", "", "", "", ""))
+            continue
+        try:
+            feature_rows.append(extract_full_gland_case(row=row, raw_root=raw_root, sitk=sitk))
+        except Exception as error:  # noqa: BLE001 - per-case failures go to the failure log.
+            failure_rows.append(
+                full_gland_failure_row(
+                    case_id=row.get("case_id", ""),
+                    fold=row.get("fold", ""),
+                    reason=f"{type(error).__name__}: {error}",
+                    path_t2w=str(resolve_manifest_path(row.get("path_t2w", ""), raw_root)),
+                    path_adc=str(resolve_manifest_path(row.get("path_adc", ""), raw_root)),
+                    path_hbv=str(resolve_manifest_path(row.get("path_hbv", ""), raw_root)),
+                    path_gland_mask=row.get("path_gland_mask", ""),
+                )
+            )
+
+    feature_columns = full_gland_feature_columns()
+    settings = build_full_gland_settings(
+        manifest_path=manifest_path,
+        raw_root=raw_root,
+        sample_size=sample_size,
+        all_cases=all_cases,
+        selected_case_ids=selected_case_ids,
+        sitk=sitk,
+    )
+    write_csv(output_path, feature_columns, feature_rows)
+    write_csv(failure_log_path, FULL_GLAND_FAILURE_COLUMNS, failure_rows)
+    write_json(settings_path, settings)
+
+    return {
+        "schema_version": "1.0",
+        "stage": "full_gland_multisequence_radiomics",
+        "cases_requested": len(selected_case_ids),
+        "features_written": len(feature_rows),
+        "failures_written": len(failure_rows),
+        "output_path": str(output_path),
+        "failure_log_path": str(failure_log_path),
+        "settings_path": str(settings_path),
+    }
+
+
 def extract_case_first_order_features(
     case_id: str,
     fold: str,
@@ -225,6 +329,106 @@ def extract_case_first_order_features(
         "mask_volume_mm3": format_float(voxel_count * voxel_volume),
         "mask_fraction": format_float(voxel_count / total_voxels if total_voxels else 0.0),
         **{key: format_float(value) for key, value in stats.items()},
+    }
+
+
+def extract_full_gland_case(row: dict[str, str], raw_root: Path, sitk: Any) -> dict[str, str]:
+    """Extract multisequence whole-gland features for one case."""
+
+    case_id = row.get("case_id", "")
+    t2w_path = resolve_manifest_path(row.get("path_t2w", ""), raw_root)
+    reference = sitk.ReadImage(str(t2w_path))
+    gland_mask_path, gland_mask = choose_reference_grid_mask(
+        mask_values=split_pipe_value(row.get("path_gland_mask", "")),
+        raw_root=raw_root,
+        reference=reference,
+        sitk=sitk,
+    )
+    if gland_mask_path is None or gland_mask is None:
+        raise ValueError("no non-empty T2W-grid gland mask found")
+
+    output = {
+        "case_id": case_id,
+        "fold": row.get("fold", ""),
+        "label_cspca": row.get("label_cspca", ""),
+        "path_t2w": str(t2w_path),
+        "path_adc": str(resolve_manifest_path(row.get("path_adc", ""), raw_root)),
+        "path_hbv": str(resolve_manifest_path(row.get("path_hbv", ""), raw_root)),
+        "path_gland_mask": str(gland_mask_path),
+    }
+    for sequence in FULL_GLAND_SEQUENCES:
+        image_path = resolve_manifest_path(row.get(FULL_GLAND_SEQUENCE_PATH_COLUMNS[sequence], ""), raw_root)
+        if sequence == "t2w":
+            image = reference
+        else:
+            image = resample_to_reference(
+                sitk.ReadImage(str(image_path)),
+                reference,
+                sitk.sitkLinear,
+                sitk,
+            )
+        features = simpleitk_first_order_features(
+            image=image,
+            mask=gland_mask,
+            sequence=sequence,
+            sitk=sitk,
+        )
+        output.update({key: format_float(value) for key, value in features.items()})
+    return output
+
+
+def choose_reference_grid_mask(
+    mask_values: list[str],
+    raw_root: Path,
+    reference: Any,
+    sitk: Any,
+) -> tuple[Path | None, Any | None]:
+    """Choose the first non-empty mask that already matches the reference grid."""
+
+    reference_signature = simpleitk_signature(reference)
+    for mask_value in mask_values:
+        mask_path = resolve_manifest_path(mask_value, raw_root)
+        mask = sitk.ReadImage(str(mask_path))
+        if not signatures_match(simpleitk_signature(mask), reference_signature):
+            continue
+        if image_has_positive_voxels(mask, sitk):
+            return mask_path, mask
+    return None, None
+
+
+def simpleitk_first_order_features(image: Any, mask: Any, sequence: str, sitk: Any) -> dict[str, float]:
+    """Compute first-order features for a SimpleITK image under a mask."""
+
+    try:
+        import numpy as np
+    except ImportError as error:  # pragma: no cover - SimpleITK installs usually include NumPy.
+        raise RuntimeError("NumPy is required for SimpleITK radiomics extraction") from error
+
+    image_array = sitk.GetArrayFromImage(image).astype(float)
+    mask_array = sitk.GetArrayFromImage(mask) > 0
+    values = image_array[mask_array]
+    if values.size == 0:
+        raise ValueError(f"empty {sequence} gland mask")
+
+    voxel_volume = float(np.prod(image.GetSpacing()))
+    histogram, _ = np.histogram(values, bins=32)
+    probabilities = histogram[histogram > 0] / values.size
+    entropy_value = float(-np.sum(probabilities * np.log2(probabilities)))
+    prefix = f"{sequence}_"
+    return {
+        f"{prefix}voxel_count": float(values.size),
+        f"{prefix}mask_volume_mm3": float(values.size * voxel_volume),
+        f"{prefix}mask_fraction": float(values.size / image_array.size),
+        f"{prefix}intensity_min": float(np.min(values)),
+        f"{prefix}intensity_max": float(np.max(values)),
+        f"{prefix}intensity_mean": float(np.mean(values)),
+        f"{prefix}intensity_std": float(np.std(values)),
+        f"{prefix}intensity_median": float(np.median(values)),
+        f"{prefix}intensity_p10": float(np.percentile(values, 10)),
+        f"{prefix}intensity_p90": float(np.percentile(values, 90)),
+        f"{prefix}intensity_iqr": float(np.percentile(values, 75) - np.percentile(values, 25)),
+        f"{prefix}intensity_energy": float(np.sum(values * values)),
+        f"{prefix}intensity_entropy_32bin": entropy_value,
     }
 
 
@@ -559,6 +763,69 @@ def build_radiomics_settings(
     }
 
 
+def build_full_gland_settings(
+    manifest_path: Path,
+    raw_root: Path,
+    sample_size: int,
+    all_cases: bool,
+    selected_case_ids: list[str],
+    sitk: Any,
+) -> dict[str, Any]:
+    """Record reproducible full whole-gland radiomics settings."""
+
+    return {
+        "schema_version": "1.0",
+        "stage": "full_gland_multisequence_radiomics",
+        "manifest_path": str(manifest_path),
+        "raw_root": str(raw_root),
+        "sample_size": sample_size,
+        "all_cases": all_cases,
+        "selected_case_ids": selected_case_ids,
+        "simpleitk_version": str(sitk.Version()),
+        "roi": "whole_gland",
+        "sequences": list(FULL_GLAND_SEQUENCES),
+        "resampling_policy": {
+            "reference": "T2W grid",
+            "adc": "resampled in memory to T2W with linear interpolation",
+            "hbv": "resampled in memory to T2W with linear interpolation",
+            "masks": "use non-empty gland mask candidate already on T2W grid",
+            "processed_images_written": False,
+        },
+        "image_source": "original T2W plus in-memory resampled original ADC/HBV; no augmentation",
+        "feature_family": "first_order_intensity_and_roi_size",
+        "feature_columns": full_gland_feature_columns(),
+        "limitations": [
+            "Dependency-light first-order features, not full PyRadiomics texture extraction.",
+            "Whole-gland case-level features only; lesion ROI features are separate.",
+            "No model performance claim is supported by this feature table alone.",
+        ],
+    }
+
+
+def full_gland_feature_columns() -> list[str]:
+    """Return the full whole-gland feature table schema."""
+
+    columns = list(FULL_GLAND_METADATA_COLUMNS)
+    feature_names = [
+        "voxel_count",
+        "mask_volume_mm3",
+        "mask_fraction",
+        "intensity_min",
+        "intensity_max",
+        "intensity_mean",
+        "intensity_std",
+        "intensity_median",
+        "intensity_p10",
+        "intensity_p90",
+        "intensity_iqr",
+        "intensity_energy",
+        "intensity_entropy_32bin",
+    ]
+    for sequence in FULL_GLAND_SEQUENCES:
+        columns.extend(f"{sequence}_{name}" for name in feature_names)
+    return columns
+
+
 def write_csv(path: str | Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
     """Write rows to CSV with a stable schema."""
 
@@ -599,6 +866,28 @@ def failure_row(
         "reason": reason,
         "image_path": image_path,
         "mask_path": mask_path,
+    }
+
+
+def full_gland_failure_row(
+    case_id: str,
+    fold: str,
+    reason: str,
+    path_t2w: str,
+    path_adc: str,
+    path_hbv: str,
+    path_gland_mask: str,
+) -> dict[str, str]:
+    """Create a full whole-gland radiomics failure row."""
+
+    return {
+        "case_id": case_id,
+        "fold": fold,
+        "reason": reason,
+        "path_t2w": path_t2w,
+        "path_adc": path_adc,
+        "path_hbv": path_hbv,
+        "path_gland_mask": path_gland_mask,
     }
 
 

@@ -8,7 +8,10 @@ from pathlib import Path
 from prostate_mri_cancer_detection.data import build_and_write_manifest
 from prostate_mri_cancer_detection.evaluation import generate_evaluation_report, run_feature_baselines
 from prostate_mri_cancer_detection.explainability import generate_explainability_report
-from prostate_mri_cancer_detection.features import extract_radiomics_features
+from prostate_mri_cancer_detection.features import (
+    extract_full_gland_multisequence_radiomics,
+    extract_radiomics_features,
+)
 from prostate_mri_cancer_detection.modeling import extract_embedding_table
 from prostate_mri_cancer_detection.preprocessing import (
     validate_preprocessing_inputs,
@@ -240,6 +243,59 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reproducible extraction settings JSON path.",
     )
     radiomics_parser.set_defaults(func=run_radiomics_extract)
+
+    full_radiomics_parser = subparsers.add_parser(
+        "radiomics-full-gland",
+        help="Extract full whole-gland T2W + resampled ADC/HBV first-order radiomics.",
+    )
+    full_radiomics_parser.add_argument(
+        "--manifest",
+        default="data/interim/picai_manifest.csv",
+        type=Path,
+        help="Stage 1 manifest CSV path.",
+    )
+    full_radiomics_parser.add_argument(
+        "--raw-root",
+        default="data/raw/picai",
+        type=Path,
+        help="Path to the local PI-CAI raw root.",
+    )
+    full_radiomics_parser.add_argument(
+        "--sample-size",
+        default=25,
+        type=int,
+        help="Number of sorted manifest cases to extract when --all-cases is not used.",
+    )
+    full_radiomics_parser.add_argument(
+        "--case-id",
+        action="append",
+        default=[],
+        help="Specific case ID to extract. Can be provided multiple times.",
+    )
+    full_radiomics_parser.add_argument(
+        "--all-cases",
+        action="store_true",
+        help="Extract all manifest cases after sample validation succeeds.",
+    )
+    full_radiomics_parser.add_argument(
+        "--output",
+        default="data/features/radiomics_gland_multisequence_sample.csv",
+        type=Path,
+        help="Feature table output path.",
+    )
+    full_radiomics_parser.add_argument(
+        "--failure-log",
+        default="outputs/reports/radiomics_gland_multisequence_failures.csv",
+        type=Path,
+        help="Per-case extraction failure log path.",
+    )
+    full_radiomics_parser.add_argument(
+        "--settings",
+        default="outputs/reports/radiomics_gland_multisequence_settings.json",
+        type=Path,
+        help="Extraction settings JSON path.",
+    )
+    full_radiomics_parser.set_defaults(func=run_full_gland_radiomics)
 
     embedding_parser = subparsers.add_parser(
         "embedding-extract",
@@ -544,6 +600,29 @@ def run_radiomics_extract(args: argparse.Namespace) -> int:
     print(f"Wrote radiomics feature table: {args.output}")
     print(f"Wrote radiomics failure log: {args.failure_log}")
     print(f"Wrote radiomics settings: {args.settings}")
+    print(f"Cases requested: {summary['cases_requested']}")
+    print(f"Features written: {summary['features_written']}")
+    print(f"Failures written: {summary['failures_written']}")
+    return 0
+
+
+def run_full_gland_radiomics(args: argparse.Namespace) -> int:
+    """Run full whole-gland multisequence radiomics extraction."""
+
+    summary = extract_full_gland_multisequence_radiomics(
+        manifest_path=args.manifest,
+        raw_root=args.raw_root,
+        output_path=args.output,
+        failure_log_path=args.failure_log,
+        settings_path=args.settings,
+        sample_size=args.sample_size,
+        case_ids=args.case_id,
+        all_cases=args.all_cases,
+    )
+
+    print(f"Wrote full gland radiomics table: {args.output}")
+    print(f"Wrote full gland failure log: {args.failure_log}")
+    print(f"Wrote full gland settings: {args.settings}")
     print(f"Cases requested: {summary['cases_requested']}")
     print(f"Features written: {summary['features_written']}")
     print(f"Failures written: {summary['failures_written']}")
