@@ -54,6 +54,7 @@ def run_cnn_smoke_training(
     model_path: str | Path,
     sample_size_per_split: int = 12,
     image_size: int = 64,
+    slice_window: int = 1,
     max_epochs: int = 1,
     batch_size: int = 4,
     learning_rate: float = 1e-3,
@@ -83,6 +84,7 @@ def run_cnn_smoke_training(
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    validate_slice_window(slice_window)
 
     manifest_path = Path(manifest_path)
     raw_root = Path(raw_root)
@@ -97,6 +99,7 @@ def run_cnn_smoke_training(
         rows=selected_rows,
         raw_root=raw_root,
         image_size=image_size,
+        slice_window=slice_window,
         sitk=sitk,
         np_module=np,
     )
@@ -122,7 +125,8 @@ def run_cnn_smoke_training(
         num_workers=0,
     )
 
-    model = TinyMultisequenceCNN(embedding_dim=embedding_dim, nn=nn).to(device)
+    input_channels = 3 * slice_window
+    model = TinyMultisequenceCNN(input_channels=input_channels, embedding_dim=embedding_dim, nn=nn).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     pos_weight = positive_class_weight(split_examples["train"], torch, device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
@@ -245,8 +249,10 @@ def run_cnn_smoke_training(
         "model": {
             "name": "TinyMultisequenceCNN",
             "training_status": training_status,
-            "input_channels": 3,
+            "input_channels": input_channels,
             "input_sequences": ["t2w", "adc_resampled_to_t2w", "hbv_resampled_to_t2w"],
+            "slice_window": slice_window,
+            "input_channel_order": "for each selected slice: t2w, adc_resampled_to_t2w, hbv_resampled_to_t2w",
             "image_size": image_size,
             "embedding_dim": embedding_dim,
             "max_epochs": max_epochs,
@@ -270,7 +276,8 @@ def run_cnn_smoke_training(
             "reference_grid": "T2W",
             "adc": "resampled in memory to T2W grid",
             "hbv": "resampled in memory to T2W grid",
-            "roi": "non-empty T2W-grid whole-gland mask selects the axial slice and crop when available",
+            "roi": "non-empty T2W-grid whole-gland mask selects the center axial slice and crop when available",
+            "slice_window": "adjacent axial slices are clamped at volume boundaries and paired across T2W/ADC/HBV",
             "normalization": "per-case per-sequence percentile clipping followed by z-score normalization",
             "writes_processed_images": False,
         },
@@ -355,6 +362,7 @@ def prepare_cnn_examples(
     rows: list[dict[str, str]],
     raw_root: Path,
     image_size: int,
+    slice_window: int,
     sitk: Any,
     np_module: Any,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
@@ -369,6 +377,7 @@ def prepare_cnn_examples(
                 row=row,
                 raw_root=raw_root,
                 image_size=image_size,
+                slice_window=slice_window,
                 sitk=sitk,
                 np_module=np_module,
             )
@@ -399,6 +408,7 @@ def load_case_tensor(
     row: dict[str, str],
     raw_root: Path,
     image_size: int,
+    slice_window: int,
     sitk: Any,
     np_module: Any,
 ) -> tuple[Any, dict[str, Any]]:
@@ -421,16 +431,24 @@ def load_case_tensor(
     if mask is not None:
         mask_array = np_module.asarray(sitk.GetArrayFromImage(mask) > 0)
 
-    slice_index = choose_slice_index(arrays["t2w"], mask_array, np_module)
-    mask_slice = mask_array[slice_index] if mask_array is not None else None
+    center_slice_index = choose_slice_index(arrays["t2w"], mask_array, np_module)
+    selected_slice_indices = windowed_slice_indices(
+        center_index=center_slice_index,
+        depth=arrays["t2w"].shape[0],
+        slice_window=slice_window,
+    )
     channels = []
-    for sequence in ("t2w", "adc", "hbv"):
-        normalized = normalize_slice(arrays[sequence][slice_index], mask_slice, np_module)
-        channels.append(crop_resize_2d(normalized, mask_slice, image_size, np_module))
+    for slice_index in selected_slice_indices:
+        mask_slice = mask_array[slice_index] if mask_array is not None else None
+        for sequence in ("t2w", "adc", "hbv"):
+            normalized = normalize_slice(arrays[sequence][slice_index], mask_slice, np_module)
+            channels.append(crop_resize_2d(normalized, mask_slice, image_size, np_module))
 
     tensor = np_module.stack(channels, axis=0).astype(np_module.float32)
     metadata = {
-        "slice_index": int(slice_index),
+        "center_slice_index": int(center_slice_index),
+        "slice_indices": [int(index) for index in selected_slice_indices],
+        "slice_window": int(slice_window),
         "used_gland_mask": mask_path is not None,
         "gland_mask_path": str(mask_path or ""),
         "source_paths": {
@@ -440,6 +458,26 @@ def load_case_tensor(
         },
     }
     return tensor, metadata
+
+
+def validate_slice_window(slice_window: int) -> None:
+    """Validate the 2.5D slice-window parameter."""
+
+    if slice_window <= 0:
+        raise ValueError("slice_window must be positive")
+    if slice_window % 2 == 0:
+        raise ValueError("slice_window must be odd so a center slice is defined")
+
+
+def windowed_slice_indices(center_index: int, depth: int, slice_window: int) -> list[int]:
+    """Return center-relative slice indices clamped to volume bounds."""
+
+    validate_slice_window(slice_window)
+    radius = slice_window // 2
+    return [
+        min(max(center_index + offset, 0), depth - 1)
+        for offset in range(-radius, radius + 1)
+    ]
 
 
 def find_reference_gland_mask(row: dict[str, str], raw_root: Path, reference: Any, sitk: Any) -> tuple[Any | None, Path | None]:
@@ -555,12 +593,12 @@ def augment_tensor(tensor: Any, case_id: str, seed: int, torch: Any) -> Any:
 class TinyMultisequenceCNN:
     """Small torch module wrapper created with injected nn module."""
 
-    def __new__(cls, embedding_dim: int, nn: Any) -> Any:
+    def __new__(cls, input_channels: int, embedding_dim: int, nn: Any) -> Any:
         class _TinyMultisequenceCNN(nn.Module):
             def __init__(self) -> None:
                 super().__init__()
                 self.features = nn.Sequential(
-                    nn.Conv2d(3, 8, kernel_size=3, padding=1),
+                    nn.Conv2d(input_channels, 8, kernel_size=3, padding=1),
                     nn.ReLU(),
                     nn.MaxPool2d(2),
                     nn.Conv2d(8, 16, kernel_size=3, padding=1),

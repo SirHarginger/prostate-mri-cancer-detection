@@ -5,7 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from prostate_mri_cancer_detection.cnn import run_cnn_smoke_training, select_cnn_rows
+from prostate_mri_cancer_detection.cnn import (
+    run_cnn_smoke_training,
+    select_cnn_rows,
+    windowed_slice_indices,
+)
 
 
 try:
@@ -39,6 +43,11 @@ class CNNSmokeSelectionTests(unittest.TestCase):
             ],
         )
 
+    def test_windowed_slice_indices_are_centered_and_clamped(self) -> None:
+        self.assertEqual(windowed_slice_indices(center_index=2, depth=5, slice_window=3), [1, 2, 3])
+        self.assertEqual(windowed_slice_indices(center_index=0, depth=5, slice_window=5), [0, 0, 0, 1, 2])
+        self.assertEqual(windowed_slice_indices(center_index=4, depth=5, slice_window=5), [2, 3, 4, 4, 4])
+
 
 @unittest.skipIf(torch is None or sitk is None or np is None, "PyTorch, NumPy, and SimpleITK are required")
 class CNNSmokeTrainingTests(unittest.TestCase):
@@ -61,6 +70,7 @@ class CNNSmokeTrainingTests(unittest.TestCase):
                 model_path=model_path,
                 sample_size_per_split=4,
                 image_size=8,
+                slice_window=3,
                 max_epochs=1,
                 batch_size=2,
                 embedding_dim=4,
@@ -76,6 +86,8 @@ class CNNSmokeTrainingTests(unittest.TestCase):
             self.assertEqual(report["case_counts"]["by_split"], {"test": 2, "train": 4, "validation": 2})
             self.assertEqual(len(report["model"]["epoch_history"]), 1)
             self.assertEqual(report["model"]["best_epoch"], 1)
+            self.assertEqual(report["model"]["input_channels"], 9)
+            self.assertEqual(report["model"]["slice_window"], 3)
             self.assertEqual(report["validation_selected_threshold"]["test"]["status"], "ok")
             self.assertEqual(len(embedding_rows), 8)
             self.assertEqual(len(prediction_rows), 8)

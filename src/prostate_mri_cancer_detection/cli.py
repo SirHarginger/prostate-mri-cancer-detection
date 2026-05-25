@@ -564,6 +564,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Square 2D crop size for CNN input.",
     )
     cnn_parser.add_argument(
+        "--slice-window",
+        default=1,
+        type=int,
+        help="Odd number of adjacent axial slices per sequence for 2.5D CNN input.",
+    )
+    cnn_parser.add_argument(
         "--max-epochs",
         default=1,
         type=int,
@@ -673,6 +679,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=96,
         type=int,
         help="Square 2D crop size for CNN input.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--slice-window",
+        default=3,
+        type=int,
+        help="Odd number of adjacent axial slices per sequence for 2.5D CNN input.",
     )
     cnn_baseline_parser.add_argument(
         "--max-epochs",
@@ -1054,6 +1066,7 @@ def run_cnn_smoke(args: argparse.Namespace) -> int:
         model_path=args.model,
         sample_size_per_split=args.sample_size_per_split,
         image_size=args.image_size,
+        slice_window=args.slice_window,
         max_epochs=args.max_epochs,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
@@ -1094,6 +1107,7 @@ def run_cnn_baseline(args: argparse.Namespace) -> int:
         model_path=args.model,
         sample_size_per_split=args.sample_size_per_split,
         image_size=args.image_size,
+        slice_window=args.slice_window,
         max_epochs=args.max_epochs,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,

@@ -24,6 +24,7 @@ PYTHONPATH=src python -m prostate_mri_cancer_detection.cli cnn-smoke-train \
   --raw-root data/raw/picai \
   --sample-size-per-split 12 \
   --image-size 64 \
+  --slice-window 1 \
   --max-epochs 1 \
   --batch-size 4 \
   --embedding-dim 32 \
@@ -53,6 +54,9 @@ For each selected case:
 - ADC and high b-value DWI are resampled to the T2W grid in memory.
 - A non-empty whole-gland mask on the T2W grid selects the axial slice and crop
   when available.
+- `--slice-window` controls 2.5D context. For example, `--slice-window 5`
+  produces 15 channels: T2W, ADC, and high b-value DWI for five adjacent axial
+  slices centered on the gland-selected slice.
 - Each sequence is normalized per case and per sequence.
 - No processed image copies are written.
 
@@ -87,7 +91,8 @@ PYTHONPATH=src python -m prostate_mri_cancer_detection.cli cnn-train-baseline \
   --raw-root data/raw/picai \
   --sample-size-per-split 96 \
   --image-size 96 \
-  --max-epochs 5 \
+  --slice-window 5 \
+  --max-epochs 10 \
   --batch-size 8 \
   --embedding-dim 32 \
   --augment-train \
