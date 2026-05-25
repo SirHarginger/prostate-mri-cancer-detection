@@ -10,6 +10,7 @@ from prostate_mri_cancer_detection.data import build_and_write_manifest
 from prostate_mri_cancer_detection.evaluation import (
     generate_evaluation_report,
     run_feature_baselines,
+    run_hybrid_ml_baseline,
     run_radiomics_cv_baseline,
     run_radiomics_ml_baseline,
 )
@@ -734,6 +735,55 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cnn_baseline_parser.set_defaults(func=run_cnn_baseline)
 
+    hybrid_parser = subparsers.add_parser(
+        "hybrid-ml-baseline",
+        help="Run aligned radiomics-only, CNN-only, and hybrid ML baselines.",
+    )
+    hybrid_parser.add_argument(
+        "--radiomics",
+        default="data/features/radiomics_gland_multisequence_full.csv",
+        type=Path,
+        help="Full multisequence whole-gland radiomics feature table.",
+    )
+    hybrid_parser.add_argument(
+        "--embeddings",
+        default="data/features/cnn_baseline_25d_embeddings.csv",
+        type=Path,
+        help="CNN embedding table from the controlled CNN baseline.",
+    )
+    hybrid_parser.add_argument(
+        "--metrics",
+        default="outputs/reports/hybrid_ml_metrics.json",
+        type=Path,
+        help="Aligned baseline metrics JSON output path.",
+    )
+    hybrid_parser.add_argument(
+        "--predictions",
+        default="outputs/reports/hybrid_ml_predictions.csv",
+        type=Path,
+        help="Aligned baseline prediction CSV output path.",
+    )
+    hybrid_parser.add_argument(
+        "--report",
+        default="outputs/reports/hybrid_ml_report.json",
+        type=Path,
+        help="Aligned baseline report JSON output path.",
+    )
+    hybrid_parser.add_argument(
+        "--target-sensitivity",
+        default=0.90,
+        type=float,
+        help="Target sensitivity for validation-selected threshold analysis.",
+    )
+    hybrid_parser.add_argument(
+        "--c-value",
+        action="append",
+        default=[],
+        type=float,
+        help="Logistic-regression C value to evaluate. Can be provided multiple times.",
+    )
+    hybrid_parser.set_defaults(func=run_hybrid_ml)
+
     evaluation_parser = subparsers.add_parser(
         "evaluation-report",
         help="Generate Stage 6 metrics and error-analysis reports from predictions.",
@@ -1137,6 +1187,38 @@ def run_cnn_baseline(args: argparse.Namespace) -> int:
         print(f"{split}: n={metrics['n']} auc={metrics['roc_auc']} sens={metrics['sensitivity']} spec={metrics['specificity']}")
     fixed = report["validation_selected_threshold"]["test"]
     print(f"Validation-selected test threshold: status={fixed['status']} metrics={fixed.get('metrics')}")
+    return 0
+
+
+def run_hybrid_ml(args: argparse.Namespace) -> int:
+    """Run aligned hybrid ML baseline."""
+
+    report = run_hybrid_ml_baseline(
+        radiomics_path=args.radiomics,
+        embeddings_path=args.embeddings,
+        metrics_path=args.metrics,
+        predictions_path=args.predictions,
+        report_path=args.report,
+        target_sensitivity=args.target_sensitivity,
+        c_values=args.c_value or None,
+    )
+
+    print(f"Wrote hybrid ML metrics: {args.metrics}")
+    print(f"Wrote hybrid ML predictions: {args.predictions}")
+    print(f"Wrote hybrid ML report: {args.report}")
+    print(f"Case counts: {report['case_counts']}")
+    print(f"Split counts: {report['split_counts']}")
+    print(f"Label counts: {report['label_counts']}")
+    for baseline, payload in report["baselines"].items():
+        test_metrics = payload["metrics"]["test"]["metrics"]
+        fixed = payload["validation_selected_threshold"]["test"]
+        print(
+            f"{baseline}: "
+            f"test_auc={test_metrics['roc_auc']} "
+            f"test_sens={test_metrics['sensitivity']} "
+            f"test_spec={test_metrics['specificity']} "
+            f"fixed={fixed.get('metrics')}"
+        )
     return 0
 
 

@@ -509,6 +509,123 @@ def run_radiomics_cv_baseline(
     return report
 
 
+def run_hybrid_ml_baseline(
+    radiomics_path: str | Path,
+    embeddings_path: str | Path,
+    metrics_path: str | Path,
+    predictions_path: str | Path,
+    report_path: str | Path,
+    target_sensitivity: float = 0.90,
+    c_values: list[float] | None = None,
+) -> dict[str, Any]:
+    """Run aligned radiomics-only, CNN-only, and hybrid ML baselines."""
+
+    try:
+        import numpy as np
+        from sklearn.impute import SimpleImputer
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import StandardScaler
+    except ImportError as error:  # pragma: no cover - depends on cluster env.
+        raise RuntimeError("scikit-learn and numpy are required for the hybrid ML baseline") from error
+
+    c_grid = c_values or [0.01, 0.1, 1.0, 10.0]
+    radiomics_rows = load_csv(radiomics_path)
+    embedding_rows = load_csv(embeddings_path)
+    radiomics_feature_columns = numeric_feature_columns(radiomics_rows)
+    embedding_feature_columns = numeric_feature_columns(embedding_rows)
+    aligned_rows, excluded_cases = align_radiomics_and_embeddings(
+        radiomics_rows=radiomics_rows,
+        embedding_rows=embedding_rows,
+        radiomics_feature_columns=radiomics_feature_columns,
+        embedding_feature_columns=embedding_feature_columns,
+    )
+    baselines = {
+        "radiomics_only": {
+            "feature_names": [f"radiomics:{name}" for name in radiomics_feature_columns],
+            "vector_key": "radiomics",
+        },
+        "cnn_embedding_only": {
+            "feature_names": [f"cnn:{name}" for name in embedding_feature_columns],
+            "vector_key": "cnn",
+        },
+        "hybrid_radiomics_cnn": {
+            "feature_names": [f"radiomics:{name}" for name in radiomics_feature_columns]
+            + [f"cnn:{name}" for name in embedding_feature_columns],
+            "vector_key": "hybrid",
+        },
+    }
+
+    all_predictions: list[dict[str, str]] = []
+    baseline_reports: dict[str, Any] = {}
+    top_coefficients: dict[str, list[dict[str, Any]]] = {}
+    for baseline_name, config in baselines.items():
+        result = train_aligned_logistic_baseline(
+            baseline_name=baseline_name,
+            aligned_rows=aligned_rows,
+            vector_key=str(config["vector_key"]),
+            feature_names=list(config["feature_names"]),
+            target_sensitivity=target_sensitivity,
+            c_grid=c_grid,
+            np_module=np,
+            SimpleImputer=SimpleImputer,
+            StandardScaler=StandardScaler,
+            LogisticRegression=LogisticRegression,
+            Pipeline=Pipeline,
+        )
+        baseline_reports[baseline_name] = result["report"]
+        top_coefficients[baseline_name] = result["top_coefficients"]
+        all_predictions.extend(result["predictions"])
+
+    report = {
+        "schema_version": "1.0",
+        "stage": "hybrid_radiomics_cnn_ml_baseline",
+        "radiomics_path": str(radiomics_path),
+        "embeddings_path": str(embeddings_path),
+        "case_counts": {
+            "radiomics": len(radiomics_rows),
+            "embeddings": len(embedding_rows),
+            "aligned": len(aligned_rows),
+            "excluded": len(excluded_cases),
+        },
+        "split_counts": dict(Counter(row["split"] for row in aligned_rows)),
+        "label_counts": dict(Counter(str(row["label"]) for row in aligned_rows)),
+        "split_label_counts": {
+            split: dict(Counter(str(row["label"]) for row in aligned_rows if row["split"] == split))
+            for split in ("train", "validation", "test")
+        },
+        "feature_counts": {
+            "radiomics_only": len(radiomics_feature_columns),
+            "cnn_embedding_only": len(embedding_feature_columns),
+            "hybrid_radiomics_cnn": len(radiomics_feature_columns) + len(embedding_feature_columns),
+        },
+        "model": {
+            "name": "LogisticRegression",
+            "class_weight": "balanced",
+            "solver": "liblinear",
+            "max_iter": 5000,
+            "random_state": 42,
+            "preprocessing": ["median imputation", "standard scaling"],
+            "hyperparameter_selection": "C selected by validation ROC-AUC for each representation",
+            "c_grid": c_grid,
+        },
+        "baselines": baseline_reports,
+        "top_coefficients": top_coefficients,
+        "excluded_cases": excluded_cases,
+        "excluded_non_feature_columns": sorted(NON_FEATURE_COLUMNS),
+        "claim_limits": [
+            "This is an internal aligned-subset comparison using CNN embeddings from the current CNN baseline run.",
+            "Radiomics-only, CNN-only, and hybrid rows use the same case IDs and split assignments.",
+            "No external validation, clinical deployment, lesion localization, or biopsy-reduction claim is supported.",
+        ],
+    }
+
+    write_json(metrics_path, baseline_reports)
+    write_predictions(predictions_path, all_predictions)
+    write_json(report_path, report)
+    return report
+
+
 def evaluate_baseline(baseline_name: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Train/evaluate a dependency-free nearest-centroid baseline."""
 
@@ -890,6 +1007,166 @@ def strip_thresholded_rows(payload: dict[str, Any]) -> dict[str, Any]:
     """Remove verbose per-row threshold output from nested reports."""
 
     return {key: value for key, value in payload.items() if key != "thresholded_rows"}
+
+
+def align_radiomics_and_embeddings(
+    radiomics_rows: list[dict[str, str]],
+    embedding_rows: list[dict[str, str]],
+    radiomics_feature_columns: list[str],
+    embedding_feature_columns: list[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Align full radiomics rows with CNN embedding rows by case ID."""
+
+    radiomics_by_case = {row["case_id"]: row for row in radiomics_rows if row.get("case_id")}
+    embeddings_by_case = {row["case_id"]: row for row in embedding_rows if row.get("case_id")}
+    aligned = []
+    excluded = []
+    for case_id in sorted(set(radiomics_by_case) & set(embeddings_by_case)):
+        radiomics_row = radiomics_by_case[case_id]
+        embedding_row = embeddings_by_case[case_id]
+        radiomics_label = parse_label(radiomics_row.get("label_cspca", ""))
+        embedding_label = parse_label(embedding_row.get("label_cspca", ""))
+        if radiomics_label is None:
+            excluded.append({"case_id": case_id, "reason": "missing_radiomics_label"})
+            continue
+        if embedding_label is not None and embedding_label != radiomics_label:
+            excluded.append({"case_id": case_id, "reason": "label_mismatch"})
+            continue
+        fold = radiomics_row.get("fold") or embedding_row.get("fold", "")
+        split = embedding_row.get("split") or SPLIT_BY_FOLD.get(fold, "unknown")
+        radiomics_vector = [float(radiomics_row[column]) for column in radiomics_feature_columns]
+        cnn_vector = [float(embedding_row[column]) for column in embedding_feature_columns]
+        aligned.append(
+            {
+                "case_id": case_id,
+                "fold": fold,
+                "split": split,
+                "label": radiomics_label,
+                "radiomics": radiomics_vector,
+                "cnn": cnn_vector,
+                "hybrid": radiomics_vector + cnn_vector,
+            }
+        )
+    return aligned, excluded
+
+
+def train_aligned_logistic_baseline(
+    baseline_name: str,
+    aligned_rows: list[dict[str, Any]],
+    vector_key: str,
+    feature_names: list[str],
+    target_sensitivity: float,
+    c_grid: list[float],
+    np_module: Any,
+    SimpleImputer: Any,
+    StandardScaler: Any,
+    LogisticRegression: Any,
+    Pipeline: Any,
+) -> dict[str, Any]:
+    """Train one aligned logistic-regression representation baseline."""
+
+    split_rows = {
+        split: [
+            {
+                "case_id": row["case_id"],
+                "fold": row["fold"],
+                "split": row["split"],
+                "label": row["label"],
+                "features": row[vector_key],
+            }
+            for row in aligned_rows
+            if row["split"] == split
+        ]
+        for split in ("train", "validation", "test")
+    }
+    if {row["label"] for row in split_rows["train"]} != {0, 1}:
+        raise ValueError(f"{baseline_name} training split must contain positive and negative cases")
+
+    selected = select_logistic_c(
+        split_rows=split_rows,
+        c_grid=c_grid,
+        np_module=np_module,
+        SimpleImputer=SimpleImputer,
+        StandardScaler=StandardScaler,
+        LogisticRegression=LogisticRegression,
+        Pipeline=Pipeline,
+    )
+    pipeline = selected["pipeline"]
+    predictions = []
+    for split, rows_for_split in split_rows.items():
+        for row in rows_for_split:
+            probability = radiomics_probability(np_module, pipeline, row)
+            prediction = 1 if probability >= 0.5 else 0
+            predictions.append(
+                {
+                    "baseline": baseline_name,
+                    "case_id": row["case_id"],
+                    "fold": row["fold"],
+                    "split": split,
+                    "label": str(row["label"]),
+                    "score": format_float(probability),
+                    "probability": format_float(probability),
+                    "prediction": str(prediction),
+                    "status": "ok",
+                    "reason": "",
+                    "selected_c": format_float(selected["c"]),
+                }
+            )
+
+    validation_rows = [row for row in predictions if row["split"] == "validation"]
+    test_rows = [row for row in predictions if row["split"] == "test"]
+    validation_threshold = fixed_sensitivity_analysis(
+        rows=validation_rows,
+        labels=[int(row["label"]) for row in validation_rows],
+        probabilities=[float(row["probability"]) for row in validation_rows],
+        target_sensitivity=target_sensitivity,
+    )
+    test_fixed = apply_threshold_from_validation(
+        rows=test_rows,
+        threshold_report=validation_threshold,
+        target_sensitivity=target_sensitivity,
+    )
+
+    coefficients = pipeline.named_steps["model"].coef_[0]
+    top_coefficients = sorted(
+        [
+            {
+                "feature": feature,
+                "coefficient": float(coefficient),
+                "abs_coefficient": abs(float(coefficient)),
+            }
+            for feature, coefficient in zip(feature_names, coefficients)
+        ],
+        key=lambda item: item["abs_coefficient"],
+        reverse=True,
+    )[:25]
+    report = {
+        "status": "ok",
+        "selected_c": selected["c"],
+        "validation_selection": selected["validation_scores"],
+        "feature_count": len(feature_names),
+        "split_counts": {split: len(rows) for split, rows in split_rows.items()},
+        "split_label_counts": {
+            split: dict(Counter(str(row["label"]) for row in rows))
+            for split, rows in split_rows.items()
+        },
+        "metrics": {
+            split: summarize_prediction_group(
+                [row for row in predictions if row["split"] == split],
+                target_sensitivity=target_sensitivity,
+            )
+            for split in ("train", "validation", "test")
+        },
+        "validation_selected_threshold": {
+            "validation": validation_threshold,
+            "test": strip_thresholded_rows(test_fixed),
+        },
+    }
+    return {
+        "report": report,
+        "predictions": predictions,
+        "top_coefficients": top_coefficients,
+    }
 
 
 def aggregate_cv_predictions(
