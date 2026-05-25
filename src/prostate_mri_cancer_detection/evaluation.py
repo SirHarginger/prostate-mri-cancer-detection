@@ -242,6 +242,7 @@ def classification_metrics(predictions: list[dict[str, str]]) -> dict[str, Any]:
     precision = safe_divide(tp, tp + fp)
     sensitivity = safe_divide(tp, tp + fn)
     specificity = safe_divide(tn, tn + fp)
+    f1 = f1_score(precision, sensitivity)
     return {
         "n": len(valid_rows),
         "label_counts": dict(Counter(str(label) for label in labels)),
@@ -249,7 +250,7 @@ def classification_metrics(predictions: list[dict[str, str]]) -> dict[str, Any]:
         "precision": precision,
         "sensitivity": sensitivity,
         "specificity": specificity,
-        "f1": safe_divide(2 * precision * sensitivity, precision + sensitivity),
+        "f1": f1,
         "roc_auc": roc_auc(labels, probabilities),
         "confusion_matrix": {"tp": tp, "tn": tn, "fp": fp, "fn": fn},
     }
@@ -422,6 +423,14 @@ def safe_divide(numerator: float, denominator: float) -> float | None:
     if denominator == 0:
         return None
     return numerator / denominator
+
+
+def f1_score(precision: float | None, sensitivity: float | None) -> float | None:
+    """Compute F1 while preserving undefined precision/recall as None."""
+
+    if precision is None or sensitivity is None:
+        return None
+    return safe_divide(2 * precision * sensitivity, precision + sensitivity)
 
 
 def sigmoid(value: float) -> float:
