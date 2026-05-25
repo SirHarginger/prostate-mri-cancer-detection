@@ -27,6 +27,7 @@ values = {
     "INPUT_DIR": nnunet["input_dir"],
     "OUTPUT_DIR": nnunet["output_dir"],
     "DATASET_ID": str(nnunet["dataset_id"]),
+    "DATASET_LABEL": nnunet["dataset_label"],
     "CONFIGURATION": nnunet["configuration"],
     "TRAINER": nnunet["trainer"],
     "FOLDS": str(nnunet["folds"]),
