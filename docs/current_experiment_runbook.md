@@ -266,6 +266,46 @@ PYTHONPATH=src python -m prostate_mri_cancer_detection.cli cnn-train-candidate \
   --model outputs/models/cnn_candidate_25d_resnet_model.pt
 ```
 
+For stability-oriented candidate selection, prefer regularized runs over simply
+adding more epochs:
+
+```bash
+PYTHONPATH=src python -m prostate_mri_cancer_detection.cli cnn-train-candidate \
+  --manifest data/interim/picai_manifest.csv \
+  --raw-root data/raw/picai \
+  --architecture cnn_candidate_25d_resnet \
+  --tensor-mode 25d \
+  --sample-size-per-split 0 \
+  --image-size 96 \
+  --slice-window 5 \
+  --max-epochs 25 \
+  --batch-size 8 \
+  --learning-rate 0.001 \
+  --weight-decay 0.0001 \
+  --dropout 0.2 \
+  --early-stopping-patience 5 \
+  --embedding-dim 64 \
+  --augment-train \
+  --device cpu \
+  --seed 42 \
+  --embeddings data/features/cnn_candidate_25d_resnet_regularized_seed42_embeddings.csv \
+  --predictions outputs/reports/cnn_candidate_25d_resnet_regularized_seed42_predictions.csv \
+  --report outputs/reports/cnn_candidate_25d_resnet_regularized_seed42_report.json \
+  --model outputs/models/cnn_candidate_25d_resnet_regularized_seed42_model.pt
+```
+
+Repeat the same configuration with additional seeds, for example `123` and
+`2026`, changing only the `--seed` and output filenames. Then summarize the
+seed stability:
+
+```bash
+PYTHONPATH=src python -m prostate_mri_cancer_detection.cli cnn-seed-summary \
+  --candidate-report outputs/reports/cnn_candidate_25d_resnet_regularized_seed42_report.json \
+  --candidate-report outputs/reports/cnn_candidate_25d_resnet_regularized_seed123_report.json \
+  --candidate-report outputs/reports/cnn_candidate_25d_resnet_regularized_seed2026_report.json \
+  --output outputs/reports/cnn_candidate_25d_resnet_regularized_seed_summary.json
+```
+
 Run the 3D candidate only after the small 3D cache check succeeds and runtime is
 acceptable:
 
@@ -389,9 +429,10 @@ The safest next engineering step is candidate CNN model selection:
 1. Validate tensor preparation for 2.5D and 3D modes.
 2. Run a tiny 2.5D ResNet-style candidate.
 3. Run a controlled 2.5D candidate on all available split cases.
-4. Run a tiny 3D Dense-style candidate if CPU runtime is acceptable.
-5. Re-run aligned hybrid evaluation using the strongest candidate embeddings.
-6. Regenerate the comparison report with bootstrap, paired AUC delta, and
+4. Run regularized multi-seed 2.5D candidates.
+5. Run a tiny 3D Dense-style candidate if CPU runtime is acceptable.
+6. Re-run aligned hybrid evaluation using the strongest candidate embeddings.
+7. Regenerate the comparison report with bootstrap, paired AUC delta, and
    calibration diagnostics.
 
 Only after this should any CNN or hybrid filename be promoted from provisional

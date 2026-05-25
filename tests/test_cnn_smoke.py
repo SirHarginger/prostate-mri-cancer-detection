@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,7 +12,9 @@ from prostate_mri_cancer_detection.cnn import (
     run_cnn_smoke_training,
     select_cnn_rows,
     select_cnn_candidate_rows,
+    summarize_cnn_seed_reports,
     validate_candidate_architecture,
+    validate_dropout,
     windowed_slice_indices,
 )
 
@@ -80,6 +83,27 @@ class CNNSmokeSelectionTests(unittest.TestCase):
         validate_candidate_architecture("cnn_candidate_25d_resnet")
         with self.assertRaises(ValueError):
             validate_candidate_architecture("tiny_cnn")
+
+    def test_validates_dropout_probability(self) -> None:
+        validate_dropout(0.0)
+        validate_dropout(0.5)
+        with self.assertRaises(ValueError):
+            validate_dropout(1.0)
+        with self.assertRaises(ValueError):
+            validate_dropout(-0.1)
+
+    def test_summarizes_candidate_seed_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            first = write_candidate_report(root, "seed_42.json", seed=42, test_auc=0.70)
+            second = write_candidate_report(root, "seed_123.json", seed=123, test_auc=0.80)
+            output = root / "summary.json"
+
+            summary = summarize_cnn_seed_reports([first, second], output)
+
+            self.assertEqual(summary["n_reports"], 2)
+            self.assertEqual(summary["summary"]["test_auc"]["mean"], 0.75)
+            self.assertTrue(output.exists())
 
 
 @unittest.skipIf(torch is None or sitk is None or np is None, "PyTorch, NumPy, and SimpleITK are required")
@@ -243,6 +267,45 @@ def write_mask(path: Path, size: tuple[int, int, int], spacing: tuple[float, flo
 def read_csv_rows(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8", newline="") as csv_file:
         return list(csv.DictReader(csv_file))
+
+
+def write_candidate_report(root: Path, name: str, seed: int, test_auc: float) -> Path:
+    path = root / name
+    payload = {
+        "model": {
+            "name": "cnn_candidate_25d_resnet",
+            "seed": seed,
+            "best_epoch": 3,
+            "stopped_epoch": 5,
+            "dropout": 0.2,
+            "weight_decay": 0.0001,
+            "early_stopping_patience": 4,
+        },
+        "metrics": {
+            "validation": {
+                "metrics": {
+                    "roc_auc": test_auc - 0.05,
+                }
+            },
+            "test": {
+                "metrics": {
+                    "roc_auc": test_auc,
+                    "sensitivity": 0.8,
+                    "specificity": 0.6,
+                }
+            },
+        },
+        "validation_selected_threshold": {
+            "test": {
+                "metrics": {
+                    "sensitivity": 0.9,
+                    "specificity": 0.4,
+                }
+            }
+        },
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
 
 
 if __name__ == "__main__":

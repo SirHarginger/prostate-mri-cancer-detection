@@ -9,6 +9,7 @@ from prostate_mri_cancer_detection.cnn import (
     prepare_cnn_tensor_cache,
     run_cnn_candidate_training,
     run_cnn_smoke_training,
+    summarize_cnn_seed_reports,
 )
 from prostate_mri_cancer_detection.data import build_and_write_manifest
 from prostate_mri_cancer_detection.evaluation import (
@@ -774,6 +775,9 @@ def build_parser() -> argparse.ArgumentParser:
     cnn_candidate_parser.add_argument("--max-epochs", default=5, type=int)
     cnn_candidate_parser.add_argument("--batch-size", default=8, type=int)
     cnn_candidate_parser.add_argument("--learning-rate", default=1e-3, type=float)
+    cnn_candidate_parser.add_argument("--weight-decay", default=0.0, type=float)
+    cnn_candidate_parser.add_argument("--dropout", default=0.0, type=float)
+    cnn_candidate_parser.add_argument("--early-stopping-patience", default=0, type=int)
     cnn_candidate_parser.add_argument("--embedding-dim", default=64, type=int)
     cnn_candidate_parser.add_argument("--augment-train", action="store_true")
     cnn_candidate_parser.add_argument("--target-sensitivity", default=0.90, type=float)
@@ -784,6 +788,14 @@ def build_parser() -> argparse.ArgumentParser:
     cnn_candidate_parser.add_argument("--report", default="outputs/reports/cnn_candidate_report.json", type=Path)
     cnn_candidate_parser.add_argument("--model", default="outputs/models/cnn_candidate_model.pt", type=Path)
     cnn_candidate_parser.set_defaults(func=run_cnn_candidate)
+
+    cnn_seed_parser = subparsers.add_parser(
+        "cnn-seed-summary",
+        help="Summarize repeated CNN candidate reports across random seeds.",
+    )
+    cnn_seed_parser.add_argument("--candidate-report", action="append", default=[], type=Path)
+    cnn_seed_parser.add_argument("--output", default="outputs/reports/cnn_candidate_seed_summary.json", type=Path)
+    cnn_seed_parser.set_defaults(func=run_cnn_seed_summary)
 
     hybrid_parser = subparsers.add_parser(
         "hybrid-ml-baseline",
@@ -1318,6 +1330,9 @@ def run_cnn_candidate(args: argparse.Namespace) -> int:
         max_epochs=args.max_epochs,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        dropout=args.dropout,
+        early_stopping_patience=args.early_stopping_patience,
         embedding_dim=args.embedding_dim,
         augment_train=args.augment_train,
         all_cases=args.all_cases,
@@ -1340,6 +1355,20 @@ def run_cnn_candidate(args: argparse.Namespace) -> int:
         print(f"{split}: n={metrics['n']} auc={metrics['roc_auc']} sens={metrics['sensitivity']} spec={metrics['specificity']}")
     fixed = report["validation_selected_threshold"]["test"]
     print(f"Validation-selected test threshold: status={fixed['status']} metrics={fixed.get('metrics')}")
+    return 0
+
+
+def run_cnn_seed_summary(args: argparse.Namespace) -> int:
+    """Summarize repeated CNN candidate reports."""
+
+    report = summarize_cnn_seed_reports(
+        candidate_reports=args.candidate_report,
+        output_path=args.output,
+    )
+
+    print(f"Wrote CNN seed summary: {args.output}")
+    print(f"Reports summarized: {report['n_reports']}")
+    print(f"Summary: {report['summary']}")
     return 0
 
 

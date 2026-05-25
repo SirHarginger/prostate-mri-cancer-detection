@@ -167,6 +167,96 @@ def prepare_cnn_tensor_cache(
     return report
 
 
+def summarize_cnn_seed_reports(
+    candidate_reports: Iterable[str | Path],
+    output_path: str | Path,
+) -> dict[str, Any]:
+    """Summarize repeated CNN candidate runs across seeds."""
+
+    reports = []
+    for report_path in candidate_reports:
+        with Path(report_path).open("r", encoding="utf-8") as report_file:
+            report = json.load(report_file)
+        reports.append((Path(report_path), report))
+    if not reports:
+        raise ValueError("at least one candidate report is required")
+
+    rows = []
+    for report_path, report in reports:
+        model = report.get("model", {})
+        metrics = report.get("metrics", {})
+        test_metrics = metrics.get("test", {}).get("metrics", {})
+        validation_metrics = metrics.get("validation", {}).get("metrics", {})
+        fixed_test = report.get("validation_selected_threshold", {}).get("test", {}).get("metrics", {})
+        rows.append(
+            {
+                "report_path": str(report_path),
+                "architecture": model.get("name"),
+                "seed": model.get("seed"),
+                "best_epoch": model.get("best_epoch"),
+                "stopped_epoch": model.get("stopped_epoch"),
+                "dropout": model.get("dropout"),
+                "weight_decay": model.get("weight_decay"),
+                "early_stopping_patience": model.get("early_stopping_patience"),
+                "test_auc": test_metrics.get("roc_auc"),
+                "test_sensitivity": test_metrics.get("sensitivity"),
+                "test_specificity": test_metrics.get("specificity"),
+                "validation_auc": validation_metrics.get("roc_auc"),
+                "fixed_test_sensitivity": fixed_test.get("sensitivity"),
+                "fixed_test_specificity": fixed_test.get("specificity"),
+            }
+        )
+
+    metric_names = [
+        "test_auc",
+        "test_sensitivity",
+        "test_specificity",
+        "validation_auc",
+        "fixed_test_sensitivity",
+        "fixed_test_specificity",
+    ]
+    summary = {
+        metric_name: summarize_numeric_values(
+            [row[metric_name] for row in rows if row.get(metric_name) is not None]
+        )
+        for metric_name in metric_names
+    }
+    output = {
+        "schema_version": "1.0",
+        "stage": "cnn_candidate_seed_summary",
+        "n_reports": len(rows),
+        "reports": rows,
+        "summary": summary,
+        "claim_limits": [
+            "This is an internal seed-stability summary for candidate CNN selection.",
+            "Seed summaries do not provide external validation or clinical performance evidence.",
+        ],
+    }
+    write_json(output_path, output)
+    return output
+
+
+def summarize_numeric_values(values: list[float | int]) -> dict[str, Any]:
+    """Return compact mean/std/min/max summary for repeated runs."""
+
+    if not values:
+        return {"n": 0, "mean": None, "std": None, "min": None, "max": None}
+    float_values = [float(value) for value in values]
+    mean = sum(float_values) / len(float_values)
+    variance = (
+        sum((value - mean) ** 2 for value in float_values) / (len(float_values) - 1)
+        if len(float_values) > 1
+        else 0.0
+    )
+    return {
+        "n": len(float_values),
+        "mean": mean,
+        "std": math.sqrt(variance),
+        "min": min(float_values),
+        "max": max(float_values),
+    }
+
+
 def run_cnn_smoke_training(
     manifest_path: str | Path,
     raw_root: str | Path,
@@ -451,6 +541,9 @@ def run_cnn_candidate_training(
     max_epochs: int = 5,
     batch_size: int = 8,
     learning_rate: float = 1e-3,
+    weight_decay: float = 0.0,
+    dropout: float = 0.0,
+    early_stopping_patience: int = 0,
     embedding_dim: int = 64,
     augment_train: bool = False,
     all_cases: bool = False,
@@ -472,6 +565,11 @@ def run_cnn_candidate_training(
 
     validate_candidate_architecture(architecture)
     validate_tensor_mode(tensor_mode)
+    validate_dropout(dropout)
+    if weight_decay < 0:
+        raise ValueError("weight_decay must be non-negative")
+    if early_stopping_patience < 0:
+        raise ValueError("early_stopping_patience must be non-negative")
     if architecture == "cnn_candidate_25d_resnet" and tensor_mode != "25d":
         raise ValueError("cnn_candidate_25d_resnet requires tensor_mode='25d'")
     if architecture == "cnn_candidate_3d_densenet" and tensor_mode != "3d":
@@ -519,15 +617,18 @@ def run_cnn_candidate_training(
         architecture=architecture,
         input_channels=input_channels,
         embedding_dim=embedding_dim,
+        dropout=dropout,
         nn=nn,
     ).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     pos_weight = positive_class_weight(split_examples["train"], torch, device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     epoch_history = []
     best_epoch = 0
     best_state = clone_state_dict(model, torch)
     best_key = (-1.0, float("-inf"))
+    epochs_without_improvement = 0
+    stopped_epoch = None
     for epoch_index in range(max(0, max_epochs)):
         model.train()
         losses = []
@@ -566,10 +667,14 @@ def run_cnn_candidate_training(
             validation_auc if validation_auc is not None else -1.0,
             -validation_loss if validation_loss is not None else float("-inf"),
         )
-        if candidate_key > best_key:
+        selected_as_best = candidate_key > best_key
+        if selected_as_best:
             best_key = candidate_key
             best_epoch = epoch_index + 1
             best_state = clone_state_dict(model, torch)
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
         epoch_history.append(
             {
                 "epoch": epoch_index + 1,
@@ -578,8 +683,12 @@ def run_cnn_candidate_training(
                 "validation_loss": validation_eval["loss"],
                 "train_metrics": train_eval["metrics"],
                 "validation_metrics": validation_eval["metrics"],
+                "selected_as_best": selected_as_best,
             }
         )
+        if early_stopping_patience > 0 and epochs_without_improvement >= early_stopping_patience:
+            stopped_epoch = epoch_index + 1
+            break
     if best_state:
         model.load_state_dict(best_state)
 
@@ -652,6 +761,10 @@ def run_cnn_candidate_training(
             "max_epochs": max_epochs,
             "batch_size": batch_size,
             "learning_rate": learning_rate,
+            "weight_decay": weight_decay,
+            "dropout": dropout,
+            "early_stopping_patience": early_stopping_patience,
+            "stopped_epoch": stopped_epoch,
             "seed": seed,
             "device": str(device),
             "best_epoch": best_epoch,
@@ -1101,6 +1214,13 @@ def validate_candidate_architecture(architecture: str) -> None:
         raise ValueError(f"unknown CNN candidate architecture: {architecture}; expected one of {choices}")
 
 
+def validate_dropout(dropout: float) -> None:
+    """Validate dropout probability."""
+
+    if dropout < 0 or dropout >= 1:
+        raise ValueError("dropout must be greater than or equal to 0 and less than 1")
+
+
 def candidate_preprocessing_policy(tensor_mode: str) -> dict[str, Any]:
     """Return the candidate preprocessing policy for reports."""
 
@@ -1253,19 +1373,26 @@ class TinyMultisequenceCNN:
         return _TinyMultisequenceCNN()
 
 
-def create_candidate_model(architecture: str, input_channels: int, embedding_dim: int, nn: Any) -> Any:
+def create_candidate_model(
+    architecture: str,
+    input_channels: int,
+    embedding_dim: int,
+    dropout: float,
+    nn: Any,
+) -> Any:
     """Create a publication-candidate CNN model."""
 
     validate_candidate_architecture(architecture)
+    validate_dropout(dropout)
     if architecture == "cnn_candidate_25d_resnet":
-        return CandidateResNet25D(input_channels=input_channels, embedding_dim=embedding_dim, nn=nn)
-    return CandidateDenseNet3D(input_channels=input_channels, embedding_dim=embedding_dim, nn=nn)
+        return CandidateResNet25D(input_channels=input_channels, embedding_dim=embedding_dim, dropout=dropout, nn=nn)
+    return CandidateDenseNet3D(input_channels=input_channels, embedding_dim=embedding_dim, dropout=dropout, nn=nn)
 
 
 class CandidateResNet25D:
     """Small residual 2.5D classifier suitable for CPU-first iteration."""
 
-    def __new__(cls, input_channels: int, embedding_dim: int, nn: Any) -> Any:
+    def __new__(cls, input_channels: int, embedding_dim: int, dropout: float, nn: Any) -> Any:
         class ResidualBlock2D(nn.Module):
             def __init__(self, channels: int) -> None:
                 super().__init__()
@@ -1299,13 +1426,14 @@ class CandidateResNet25D:
                     ResidualBlock2D(48),
                 )
                 self.pool = nn.AdaptiveAvgPool2d((1, 1))
+                self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
                 self.embedding = nn.Linear(48, embedding_dim)
                 self.classifier = nn.Linear(embedding_dim, 1)
 
             def forward(self, images: Any) -> tuple[Any, Any]:
                 features = self.residual(self.stem(images))
                 pooled = self.pool(features).flatten(1)
-                embeddings = self.embedding(pooled)
+                embeddings = self.embedding(self.dropout(pooled))
                 logits = self.classifier(nn.functional.relu(embeddings)).squeeze(1)
                 return logits, embeddings
 
@@ -1315,7 +1443,7 @@ class CandidateResNet25D:
 class CandidateDenseNet3D:
     """Small dense-style 3D classifier for volumetric candidate experiments."""
 
-    def __new__(cls, input_channels: int, embedding_dim: int, nn: Any) -> Any:
+    def __new__(cls, input_channels: int, embedding_dim: int, dropout: float, nn: Any) -> Any:
         import torch
 
         class DenseLayer3D(nn.Module):
@@ -1361,13 +1489,14 @@ class CandidateDenseNet3D:
                     nn.MaxPool3d(kernel_size=2),
                 )
                 self.pool = nn.AdaptiveAvgPool3d((1, 1, 1))
+                self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
                 self.embedding = nn.Linear(32, embedding_dim)
                 self.classifier = nn.Linear(embedding_dim, 1)
 
             def forward(self, images: Any) -> tuple[Any, Any]:
                 features = self.transition(self.dense(self.stem(images)))
                 pooled = self.pool(features).flatten(1)
-                embeddings = self.embedding(pooled)
+                embeddings = self.embedding(self.dropout(pooled))
                 logits = self.classifier(nn.functional.relu(embeddings)).squeeze(1)
                 return logits, embeddings
 

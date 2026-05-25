@@ -56,11 +56,18 @@ The candidate CNN pipeline supports:
 - whole-gland centered 3D tensors
 - per-case/per-sequence normalization
 - train-only augmentation
+- dropout, weight decay, and early-stopping controls for stability experiments
 - validation-selected checkpoint and threshold reporting
+- repeated-seed summary reports for candidate selection
 - ignored tensor caches, feature tables, model checkpoints, and reports
 
 The project should compare candidate CNN embeddings against radiomics on the
 same case IDs and split policy before making any claim about CNN benefit.
+
+Longer training is not sufficient by itself. Candidate promotion should be
+based on validation-selected checkpoints, held-out test performance, repeated
+seed stability, and whether hybrid fusion adds value over radiomics on the same
+aligned cohort.
 
 ## Evaluation Requirements
 
