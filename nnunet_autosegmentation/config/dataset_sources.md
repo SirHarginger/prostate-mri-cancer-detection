@@ -1,29 +1,17 @@
 # Dataset Sources
 
-## PROSTATEx
+This folder tracks external data sources used only for nnU-Net autosegmentation experiments.
 
-Use PROSTATEx as the first external unsegmented prostate MRI source.
+## PROSTATE-MRI
 
-Official TCIA collection page:
+- Source DOI in metadata: https://doi.org/10.7937/K9/TCIA.2016.6046GUDv
+- Current cluster mirror path: `nnunet_autosegmentation/data/raw/world_wide_covid/PROSTATE_MRI`
+- The Kaggle dataset name is misleading; the extracted metadata and DICOM folders are `PROSTATE-MRI`.
+- Use only the axial T2 series (`T2 TSE ax hi`) for the first autosegmentation pass.
 
-```text
-https://www.cancerimagingarchive.net/collection/prostatex/
-```
+## Storage Rules
 
-Download data on the cluster into:
-
-```text
-nnunet_autosegmentation/data/raw/prostatex/
-```
-
-Do not commit downloaded DICOM/NIfTI files.
-
-## Training Segmentation Model
-
-nnU-Net prediction needs a trained model. Potential labeled sources include:
-
-- PI-CAI anatomical whole-gland masks already present in the main cluster data.
-- Medical Segmentation Decathlon prostate task if a zone/gland segmentation
-  experiment is planned separately.
-
-Do not mix segmentation training outputs with the main classification outputs.
+- Raw external data is not committed.
+- nnU-Net preprocessed data is not committed.
+- nnU-Net predictions are not committed.
+- Extracted feature tables are not committed unless explicitly reviewed.

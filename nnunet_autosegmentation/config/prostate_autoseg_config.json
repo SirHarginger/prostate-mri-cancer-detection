@@ -1,16 +1,16 @@
 {
   "dataset_name": "prostate_external_autosegmentation",
   "external_source": {
-    "name": "PROSTATEx",
-    "official_url": "https://www.cancerimagingarchive.net/collection/prostatex/",
-    "download_dir": "nnunet_autosegmentation/data/raw/prostatex"
+    "name": "PROSTATE-MRI",
+    "official_url": "https://doi.org/10.7937/K9/TCIA.2016.6046GUDv",
+    "download_dir": "nnunet_autosegmentation/data/raw/world_wide_covid"
   },
   "nnunet": {
     "raw": "nnunet_autosegmentation/data/nnunet_raw",
     "preprocessed": "nnunet_autosegmentation/data/nnunet_preprocessed",
     "results": "nnunet_autosegmentation/data/nnunet_results",
     "input_dir": "nnunet_autosegmentation/data/nnunet_raw/Dataset901_ProstateExternal/imagesTs",
-    "output_dir": "nnunet_autosegmentation/data/external_predictions/prostatex",
+    "output_dir": "nnunet_autosegmentation/data/external_predictions/prostate_mri",
     "dataset_id": 901,
     "dataset_label": "ProstateExternal",
     "trainer": "nnUNetTrainer",
@@ -19,8 +19,8 @@
   },
   "feature_extraction": {
     "image_dir": "nnunet_autosegmentation/data/nnunet_raw/Dataset901_ProstateExternal/imagesTs",
-    "mask_dir": "nnunet_autosegmentation/data/external_predictions/prostatex",
-    "output_csv": "nnunet_autosegmentation/outputs/features/prostatex_autoseg_features.csv",
-    "report_json": "nnunet_autosegmentation/outputs/reports/prostatex_autoseg_feature_report.json"
+    "mask_dir": "nnunet_autosegmentation/data/external_predictions/prostate_mri",
+    "output_csv": "nnunet_autosegmentation/outputs/features/prostate_mri_autoseg_features.csv",
+    "report_json": "nnunet_autosegmentation/outputs/reports/prostate_mri_autoseg_feature_report.json"
   }
 }
