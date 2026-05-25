@@ -5,7 +5,11 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from prostate_mri_cancer_detection.cnn import run_cnn_smoke_training
+from prostate_mri_cancer_detection.cnn import (
+    prepare_cnn_tensor_cache,
+    run_cnn_candidate_training,
+    run_cnn_smoke_training,
+)
 from prostate_mri_cancer_detection.data import build_and_write_manifest
 from prostate_mri_cancer_detection.evaluation import (
     generate_evaluation_report,
@@ -736,6 +740,51 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cnn_baseline_parser.set_defaults(func=run_cnn_baseline)
 
+    tensor_cache_parser = subparsers.add_parser(
+        "cnn-prepare-tensors",
+        help="Prepare reusable gland-centered multisequence CNN tensors under data/processed.",
+    )
+    tensor_cache_parser.add_argument("--manifest", default="data/interim/picai_manifest.csv", type=Path)
+    tensor_cache_parser.add_argument("--raw-root", default="data/raw/picai", type=Path)
+    tensor_cache_parser.add_argument("--output-root", default="data/processed/cnn_candidate_tensors", type=Path)
+    tensor_cache_parser.add_argument("--report", default="outputs/reports/cnn_candidate_tensor_cache_report.json", type=Path)
+    tensor_cache_parser.add_argument("--tensor-mode", default="25d", choices=["25d", "3d"])
+    tensor_cache_parser.add_argument("--sample-size-per-split", default=4, type=int)
+    tensor_cache_parser.add_argument("--image-size", default=64, type=int)
+    tensor_cache_parser.add_argument("--slice-window", default=5, type=int)
+    tensor_cache_parser.add_argument("--volume-depth", default=16, type=int)
+    tensor_cache_parser.add_argument("--case-id", action="append", default=[])
+    tensor_cache_parser.add_argument("--all-cases", action="store_true")
+    tensor_cache_parser.set_defaults(func=run_cnn_prepare_tensors)
+
+    cnn_candidate_parser = subparsers.add_parser(
+        "cnn-train-candidate",
+        help="Train a publication-candidate 2.5D ResNet-style or 3D Dense-style CNN.",
+    )
+    cnn_candidate_parser.add_argument("--manifest", default="data/interim/picai_manifest.csv", type=Path)
+    cnn_candidate_parser.add_argument("--raw-root", default="data/raw/picai", type=Path)
+    cnn_candidate_parser.add_argument("--architecture", default="cnn_candidate_25d_resnet", choices=["cnn_candidate_25d_resnet", "cnn_candidate_3d_densenet"])
+    cnn_candidate_parser.add_argument("--tensor-mode", default="25d", choices=["25d", "3d"])
+    cnn_candidate_parser.add_argument("--sample-size-per-split", default=0, type=int)
+    cnn_candidate_parser.add_argument("--all-cases", action="store_true")
+    cnn_candidate_parser.add_argument("--case-id", action="append", default=[])
+    cnn_candidate_parser.add_argument("--image-size", default=96, type=int)
+    cnn_candidate_parser.add_argument("--slice-window", default=5, type=int)
+    cnn_candidate_parser.add_argument("--volume-depth", default=16, type=int)
+    cnn_candidate_parser.add_argument("--max-epochs", default=5, type=int)
+    cnn_candidate_parser.add_argument("--batch-size", default=8, type=int)
+    cnn_candidate_parser.add_argument("--learning-rate", default=1e-3, type=float)
+    cnn_candidate_parser.add_argument("--embedding-dim", default=64, type=int)
+    cnn_candidate_parser.add_argument("--augment-train", action="store_true")
+    cnn_candidate_parser.add_argument("--target-sensitivity", default=0.90, type=float)
+    cnn_candidate_parser.add_argument("--seed", default=42, type=int)
+    cnn_candidate_parser.add_argument("--device", default="cpu")
+    cnn_candidate_parser.add_argument("--embeddings", default="data/features/cnn_candidate_embeddings.csv", type=Path)
+    cnn_candidate_parser.add_argument("--predictions", default="outputs/reports/cnn_candidate_predictions.csv", type=Path)
+    cnn_candidate_parser.add_argument("--report", default="outputs/reports/cnn_candidate_report.json", type=Path)
+    cnn_candidate_parser.add_argument("--model", default="outputs/models/cnn_candidate_model.pt", type=Path)
+    cnn_candidate_parser.set_defaults(func=run_cnn_candidate)
+
     hybrid_parser = subparsers.add_parser(
         "hybrid-ml-baseline",
         help="Run aligned radiomics-only, CNN-only, and hybrid ML baselines.",
@@ -1215,6 +1264,73 @@ def run_cnn_baseline(args: argparse.Namespace) -> int:
     print(f"Wrote CNN baseline predictions: {args.predictions}")
     print(f"Wrote CNN baseline report: {args.report}")
     print(f"Wrote CNN baseline model: {args.model}")
+    print(f"Summary: {report['summary']}")
+    print(f"Case counts: {report['case_counts']}")
+    print(f"Label counts: {report['label_counts']}")
+    print(f"Best epoch: {report['model']['best_epoch']}")
+    for split, payload in report["metrics"].items():
+        metrics = payload["metrics"]
+        print(f"{split}: n={metrics['n']} auc={metrics['roc_auc']} sens={metrics['sensitivity']} spec={metrics['specificity']}")
+    fixed = report["validation_selected_threshold"]["test"]
+    print(f"Validation-selected test threshold: status={fixed['status']} metrics={fixed.get('metrics')}")
+    return 0
+
+
+def run_cnn_prepare_tensors(args: argparse.Namespace) -> int:
+    """Run CNN candidate tensor cache preparation."""
+
+    report = prepare_cnn_tensor_cache(
+        manifest_path=args.manifest,
+        raw_root=args.raw_root,
+        output_root=args.output_root,
+        report_path=args.report,
+        tensor_mode=args.tensor_mode,
+        sample_size_per_split=args.sample_size_per_split,
+        image_size=args.image_size,
+        slice_window=args.slice_window,
+        volume_depth=args.volume_depth,
+        all_cases=args.all_cases,
+        case_ids=args.case_id,
+    )
+
+    print(f"Wrote CNN tensor cache report: {args.report}")
+    print(f"Output root: {args.output_root}")
+    print(f"Summary: {report['summary']}")
+    return 0
+
+
+def run_cnn_candidate(args: argparse.Namespace) -> int:
+    """Run publication-candidate CNN training."""
+
+    report = run_cnn_candidate_training(
+        manifest_path=args.manifest,
+        raw_root=args.raw_root,
+        embeddings_path=args.embeddings,
+        predictions_path=args.predictions,
+        report_path=args.report,
+        model_path=args.model,
+        architecture=args.architecture,
+        tensor_mode=args.tensor_mode,
+        sample_size_per_split=args.sample_size_per_split,
+        image_size=args.image_size,
+        slice_window=args.slice_window,
+        volume_depth=args.volume_depth,
+        max_epochs=args.max_epochs,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        embedding_dim=args.embedding_dim,
+        augment_train=args.augment_train,
+        all_cases=args.all_cases,
+        case_ids=args.case_id,
+        target_sensitivity=args.target_sensitivity,
+        seed=args.seed,
+        device_name=args.device,
+    )
+
+    print(f"Wrote CNN candidate embeddings: {args.embeddings}")
+    print(f"Wrote CNN candidate predictions: {args.predictions}")
+    print(f"Wrote CNN candidate report: {args.report}")
+    print(f"Wrote CNN candidate model: {args.model}")
     print(f"Summary: {report['summary']}")
     print(f"Case counts: {report['case_counts']}")
     print(f"Label counts: {report['label_counts']}")

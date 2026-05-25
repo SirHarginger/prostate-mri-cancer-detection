@@ -6,8 +6,12 @@ import unittest
 from pathlib import Path
 
 from prostate_mri_cancer_detection.cnn import (
+    gland_crop_box_3d,
+    prepare_cnn_tensor_cache,
     run_cnn_smoke_training,
     select_cnn_rows,
+    select_cnn_candidate_rows,
+    validate_candidate_architecture,
     windowed_slice_indices,
 )
 
@@ -47,6 +51,35 @@ class CNNSmokeSelectionTests(unittest.TestCase):
         self.assertEqual(windowed_slice_indices(center_index=2, depth=5, slice_window=3), [1, 2, 3])
         self.assertEqual(windowed_slice_indices(center_index=0, depth=5, slice_window=5), [0, 0, 0, 1, 2])
         self.assertEqual(windowed_slice_indices(center_index=4, depth=5, slice_window=5), [2, 3, 4, 4, 4])
+
+    def test_candidate_selection_is_not_forced_balanced(self) -> None:
+        rows = [
+            row(case_id="10000_1000000", fold="fold0", label="NO"),
+            row(case_id="10001_1000001", fold="fold0", label="NO"),
+            row(case_id="10002_1000002", fold="fold0", label="YES"),
+            row(case_id="10030_1000030", fold="fold3", label="NO"),
+            row(case_id="10031_1000031", fold="fold3", label="YES"),
+            row(case_id="10040_1000040", fold="fold4", label="NO"),
+            row(case_id="10041_1000041", fold="fold4", label="YES"),
+        ]
+        selected = select_cnn_candidate_rows(rows, sample_size_per_split=2, all_cases=False)
+
+        self.assertEqual([item["case_id"] for item in selected[:2]], ["10000_1000000", "10001_1000001"])
+
+    def test_gland_crop_box_3d_uses_mask_when_available(self) -> None:
+        if np is None:
+            self.skipTest("NumPy is not installed")
+        mask = np.zeros((6, 8, 10), dtype=bool)
+        mask[2:4, 3:6, 4:8] = True
+
+        crop_box = gland_crop_box_3d(mask.shape, mask)
+
+        self.assertEqual(crop_box, (1, 5, 2, 7, 3, 9))
+
+    def test_validates_candidate_architecture_names(self) -> None:
+        validate_candidate_architecture("cnn_candidate_25d_resnet")
+        with self.assertRaises(ValueError):
+            validate_candidate_architecture("tiny_cnn")
 
 
 @unittest.skipIf(torch is None or sitk is None or np is None, "PyTorch, NumPy, and SimpleITK are required")
@@ -95,6 +128,30 @@ class CNNSmokeTrainingTests(unittest.TestCase):
             self.assertEqual({row["augmentation_applied"] for row in embedding_rows}, {"False"})
             self.assertTrue(model_path.exists())
             self.assertTrue(report_path.exists())
+
+    def test_prepares_3d_tensor_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            raw_root = create_cnn_fixture(root)
+            manifest = write_manifest(root)
+            output_root = root / "data" / "processed" / "cnn_tensors"
+            report_path = root / "outputs" / "reports" / "tensor_cache.json"
+
+            report = prepare_cnn_tensor_cache(
+                manifest_path=manifest,
+                raw_root=raw_root,
+                output_root=output_root,
+                report_path=report_path,
+                tensor_mode="3d",
+                sample_size_per_split=1,
+                image_size=8,
+                volume_depth=4,
+            )
+
+            self.assertEqual(report["summary"]["tensors_written"], 3)
+            self.assertEqual(report["summary"]["failures"], 0)
+            self.assertEqual(report["tensors"][0]["tensor_shape"], [3, 4, 8, 8])
+            self.assertTrue(Path(report["tensors"][0]["tensor_path"]).exists())
 
 
 def row(case_id: str, fold: str, label: str) -> dict[str, str]:

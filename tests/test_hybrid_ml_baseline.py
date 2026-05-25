@@ -5,7 +5,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from prostate_mri_cancer_detection.evaluation import run_hybrid_ml_baseline
+from prostate_mri_cancer_detection.evaluation import (
+    bootstrap_metrics_ci,
+    calibration_diagnostics,
+    paired_auc_delta_ci,
+    run_hybrid_ml_baseline,
+)
 
 
 try:
@@ -44,9 +49,25 @@ class HybridMLBaselineTests(unittest.TestCase):
             self.assertEqual(report["feature_counts"]["hybrid_radiomics_cnn"], 5)
             self.assertEqual(set(report["baselines"]), {"radiomics_only", "cnn_embedding_only", "hybrid_radiomics_cnn"})
             self.assertEqual(len(prediction_rows), 24)
+            self.assertEqual(report["paired_test_auc_deltas"]["hybrid_minus_radiomics"]["status"], "ok")
+            self.assertEqual(report["baselines"]["hybrid_radiomics_cnn"]["test_calibration"]["status"], "ok")
+            self.assertEqual(report["baselines"]["hybrid_radiomics_cnn"]["test_bootstrap_ci"]["status"], "ok")
             self.assertTrue(metrics.exists())
             self.assertTrue(report_path.exists())
             self.assertNotIn("label_cspca", report["top_coefficients"]["hybrid_radiomics_cnn"][0]["feature"])
+
+    def test_metric_rigor_helpers(self) -> None:
+        left = prediction_rows("left", [0.1, 0.2, 0.8, 0.9])
+        right = prediction_rows("right", [0.2, 0.3, 0.7, 0.8])
+
+        ci = bootstrap_metrics_ci(left, n_bootstrap=20, seed=1)
+        delta = paired_auc_delta_ci(left, right, n_bootstrap=20, seed=1)
+        calibration = calibration_diagnostics(left, n_bins=2)
+
+        self.assertEqual(ci["status"], "ok")
+        self.assertEqual(delta["status"], "ok")
+        self.assertEqual(calibration["status"], "ok")
+        self.assertIn("brier_score", calibration)
 
 
 def write_radiomics(root: Path) -> Path:
@@ -139,6 +160,25 @@ def split_for_fold(fold: str) -> str:
 def read_csv_rows(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8", newline="") as csv_file:
         return list(csv.DictReader(csv_file))
+
+
+def prediction_rows(baseline_name: str, probabilities: list[float]) -> list[dict[str, str]]:
+    labels = [0, 0, 1, 1]
+    return [
+        {
+            "baseline": baseline_name,
+            "case_id": f"case_{index}",
+            "fold": "fold4",
+            "split": "test",
+            "label": str(label),
+            "score": str(probability),
+            "probability": str(probability),
+            "prediction": str(int(probability >= 0.5)),
+            "status": "ok",
+            "reason": "",
+        }
+        for index, (label, probability) in enumerate(zip(labels, probabilities))
+    ]
 
 
 if __name__ == "__main__":

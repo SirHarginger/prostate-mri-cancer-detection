@@ -576,6 +576,10 @@ def run_hybrid_ml_baseline(
         baseline_reports[baseline_name] = result["report"]
         top_coefficients[baseline_name] = result["top_coefficients"]
         all_predictions.extend(result["predictions"])
+    prediction_groups = {
+        baseline: [row for row in all_predictions if row["baseline"] == baseline and row["split"] == "test"]
+        for baseline in baselines
+    }
 
     report = {
         "schema_version": "1.0",
@@ -610,6 +614,20 @@ def run_hybrid_ml_baseline(
             "c_grid": c_grid,
         },
         "baselines": baseline_reports,
+        "paired_test_auc_deltas": {
+            "hybrid_minus_radiomics": paired_auc_delta_ci(
+                prediction_groups["hybrid_radiomics_cnn"],
+                prediction_groups["radiomics_only"],
+            ),
+            "hybrid_minus_cnn": paired_auc_delta_ci(
+                prediction_groups["hybrid_radiomics_cnn"],
+                prediction_groups["cnn_embedding_only"],
+            ),
+            "cnn_minus_radiomics": paired_auc_delta_ci(
+                prediction_groups["cnn_embedding_only"],
+                prediction_groups["radiomics_only"],
+            ),
+        },
         "top_coefficients": top_coefficients,
         "excluded_cases": excluded_cases,
         "excluded_non_feature_columns": sorted(NON_FEATURE_COLUMNS),
@@ -908,6 +926,156 @@ def threshold_metrics(labels: list[int], predicted: list[int]) -> dict[str, Any]
         "specificity": specificity,
         "f1": f1_score(precision, sensitivity),
         "confusion_matrix": {"tp": tp, "tn": tn, "fp": fp, "fn": fn},
+    }
+
+
+def bootstrap_metrics_ci(
+    rows: list[dict[str, str]],
+    n_bootstrap: int = 500,
+    confidence: float = 0.95,
+    seed: int = 42,
+) -> dict[str, Any]:
+    """Compute bootstrap confidence intervals for prediction metrics."""
+
+    valid_rows = [row for row in rows if row.get("status") == "ok"]
+    if len(valid_rows) < 2:
+        return {"status": "undefined", "reason": "requires at least two prediction rows"}
+
+    random = __import__("random").Random(seed)
+    metric_values: dict[str, list[float]] = {
+        "roc_auc": [],
+        "sensitivity": [],
+        "specificity": [],
+        "precision": [],
+        "f1": [],
+    }
+    for _ in range(n_bootstrap):
+        sample = [valid_rows[random.randrange(len(valid_rows))] for _index in range(len(valid_rows))]
+        metrics = classification_metrics(sample)
+        for metric_name in metric_values:
+            value = metrics.get(metric_name)
+            if value is not None:
+                metric_values[metric_name].append(float(value))
+
+    return {
+        "status": "ok",
+        "n_bootstrap": n_bootstrap,
+        "confidence": confidence,
+        "metrics": {
+            metric_name: percentile_interval(values, confidence)
+            for metric_name, values in metric_values.items()
+        },
+    }
+
+
+def paired_auc_delta_ci(
+    left_rows: list[dict[str, str]],
+    right_rows: list[dict[str, str]],
+    n_bootstrap: int = 500,
+    confidence: float = 0.95,
+    seed: int = 42,
+) -> dict[str, Any]:
+    """Compute paired bootstrap CI for ROC-AUC difference left minus right."""
+
+    left_by_case = {row["case_id"]: row for row in left_rows if row.get("status") == "ok"}
+    right_by_case = {row["case_id"]: row for row in right_rows if row.get("status") == "ok"}
+    case_ids = sorted(set(left_by_case) & set(right_by_case))
+    if len(case_ids) < 2:
+        return {"status": "undefined", "reason": "requires at least two aligned prediction rows"}
+
+    labels = [int(left_by_case[case_id]["label"]) for case_id in case_ids]
+    if sum(labels) == 0 or sum(labels) == len(labels):
+        return {"status": "undefined", "reason": "requires positive and negative aligned rows"}
+
+    left_scores = [float(left_by_case[case_id]["probability"]) for case_id in case_ids]
+    right_scores = [float(right_by_case[case_id]["probability"]) for case_id in case_ids]
+    observed = roc_auc(labels, left_scores) - roc_auc(labels, right_scores)
+    random = __import__("random").Random(seed)
+    deltas = []
+    for _ in range(n_bootstrap):
+        indices = [random.randrange(len(case_ids)) for _index in range(len(case_ids))]
+        sample_labels = [labels[index] for index in indices]
+        if sum(sample_labels) == 0 or sum(sample_labels) == len(sample_labels):
+            continue
+        sample_left = [left_scores[index] for index in indices]
+        sample_right = [right_scores[index] for index in indices]
+        deltas.append(roc_auc(sample_labels, sample_left) - roc_auc(sample_labels, sample_right))
+
+    return {
+        "status": "ok",
+        "n": len(case_ids),
+        "observed_delta": observed,
+        "n_bootstrap": n_bootstrap,
+        "confidence": confidence,
+        "ci": percentile_interval(deltas, confidence),
+    }
+
+
+def calibration_diagnostics(
+    rows: list[dict[str, str]],
+    n_bins: int = 10,
+) -> dict[str, Any]:
+    """Compute Brier score and simple calibration-bin diagnostics."""
+
+    valid_rows = [row for row in rows if row.get("status") == "ok"]
+    if not valid_rows:
+        return {"status": "undefined", "reason": "no prediction rows"}
+    labels = [int(row["label"]) for row in valid_rows]
+    probabilities = [float(row["probability"]) for row in valid_rows]
+    brier = sum((probability - label) ** 2 for probability, label in zip(probabilities, labels)) / len(valid_rows)
+    bins = []
+    for bin_index in range(n_bins):
+        low = bin_index / n_bins
+        high = (bin_index + 1) / n_bins
+        if bin_index == n_bins - 1:
+            bin_rows = [
+                (label, probability)
+                for label, probability in zip(labels, probabilities)
+                if low <= probability <= high
+            ]
+        else:
+            bin_rows = [
+                (label, probability)
+                for label, probability in zip(labels, probabilities)
+                if low <= probability < high
+            ]
+        if not bin_rows:
+            bins.append({"bin": bin_index, "low": low, "high": high, "n": 0})
+            continue
+        bin_labels = [item[0] for item in bin_rows]
+        bin_probabilities = [item[1] for item in bin_rows]
+        bins.append(
+            {
+                "bin": bin_index,
+                "low": low,
+                "high": high,
+                "n": len(bin_rows),
+                "mean_probability": sum(bin_probabilities) / len(bin_probabilities),
+                "observed_fraction": sum(bin_labels) / len(bin_labels),
+            }
+        )
+    return {
+        "status": "ok",
+        "n": len(valid_rows),
+        "brier_score": brier,
+        "bins": bins,
+    }
+
+
+def percentile_interval(values: list[float], confidence: float) -> dict[str, Any]:
+    """Return percentile confidence interval for values."""
+
+    if not values:
+        return {"mean": None, "lower": None, "upper": None, "n": 0}
+    sorted_values = sorted(values)
+    alpha = (1 - confidence) / 2
+    lower_index = min(max(int(math.floor(alpha * (len(sorted_values) - 1))), 0), len(sorted_values) - 1)
+    upper_index = min(max(int(math.ceil((1 - alpha) * (len(sorted_values) - 1))), 0), len(sorted_values) - 1)
+    return {
+        "mean": sum(sorted_values) / len(sorted_values),
+        "lower": sorted_values[lower_index],
+        "upper": sorted_values[upper_index],
+        "n": len(sorted_values),
     }
 
 
@@ -1210,6 +1378,12 @@ def train_aligned_logistic_baseline(
             )
             for split in ("train", "validation", "test")
         },
+        "test_bootstrap_ci": bootstrap_metrics_ci(
+            [row for row in predictions if row["split"] == "test"]
+        ),
+        "test_calibration": calibration_diagnostics(
+            [row for row in predictions if row["split"] == "test"]
+        ),
         "validation_selected_threshold": {
             "validation": validation_threshold,
             "test": strip_thresholded_rows(test_fixed),

@@ -51,6 +51,27 @@ Before final naming, confirm that the workflow is the selected final method.
 Do not rename provisional outputs into final names just because a command ran
 successfully.
 
+## Architecture Policy
+
+The current `TinyMultisequenceCNN` and `cnn-train-baseline` path are pipeline
+validators. They prove that split-safe loading, paired T2W/ADC/HBV transforms,
+train-only augmentation, checkpointing, embeddings, predictions, and reports
+work end to end.
+
+They are not publication-grade architecture claims.
+
+Current publication-candidate model names are:
+
+```text
+cnn_candidate_25d_resnet
+cnn_candidate_3d_densenet
+hybrid_radiomics_cnn_candidate
+```
+
+CNN performance is a hypothesis. The project should only claim CNN or hybrid
+benefit when candidate CNN embeddings improve over radiomics on the same
+case IDs, split policy, threshold policy, and evaluation metrics.
+
 ## Regeneration Commands
 
 ### Dataset Manifest
@@ -166,6 +187,108 @@ validation-selected threshold test sensitivity/specificity: 0.8778 / 0.3333
 The default threshold is poorly calibrated. Use validation-selected threshold
 results only as exploratory threshold behavior.
 
+### Candidate CNN Tensor Cache
+
+Use this to prepare ignored gland-centered tensor caches for candidate CNN
+experiments. Caching is optional for small runs, but useful for repeatable
+cluster experiments.
+
+```bash
+PYTHONPATH=src python -m prostate_mri_cancer_detection.cli cnn-prepare-tensors \
+  --manifest data/interim/picai_manifest.csv \
+  --raw-root data/raw/picai \
+  --tensor-mode 25d \
+  --sample-size-per-split 4 \
+  --image-size 64 \
+  --slice-window 5 \
+  --output-root data/processed/cnn_candidate_25d_tensor_sample \
+  --report outputs/reports/cnn_candidate_25d_tensor_sample_report.json
+```
+
+For a small 3D cache check:
+
+```bash
+PYTHONPATH=src python -m prostate_mri_cancer_detection.cli cnn-prepare-tensors \
+  --manifest data/interim/picai_manifest.csv \
+  --raw-root data/raw/picai \
+  --tensor-mode 3d \
+  --sample-size-per-split 2 \
+  --image-size 64 \
+  --volume-depth 12 \
+  --output-root data/processed/cnn_candidate_3d_tensor_sample \
+  --report outputs/reports/cnn_candidate_3d_tensor_sample_report.json
+```
+
+### Candidate CNN Training
+
+Run a tiny candidate first to validate the command path:
+
+```bash
+PYTHONPATH=src python -m prostate_mri_cancer_detection.cli cnn-train-candidate \
+  --manifest data/interim/picai_manifest.csv \
+  --raw-root data/raw/picai \
+  --architecture cnn_candidate_25d_resnet \
+  --tensor-mode 25d \
+  --sample-size-per-split 12 \
+  --image-size 64 \
+  --slice-window 5 \
+  --max-epochs 1 \
+  --batch-size 4 \
+  --embedding-dim 64 \
+  --augment-train \
+  --device cpu \
+  --embeddings data/features/cnn_candidate_25d_resnet_smoke_embeddings.csv \
+  --predictions outputs/reports/cnn_candidate_25d_resnet_smoke_predictions.csv \
+  --report outputs/reports/cnn_candidate_25d_resnet_smoke_report.json \
+  --model outputs/models/cnn_candidate_25d_resnet_smoke_model.pt
+```
+
+Then run a controlled 2.5D candidate. `--sample-size-per-split 0` means use
+all labeled cases available in each split, rather than a balanced subset:
+
+```bash
+PYTHONPATH=src python -m prostate_mri_cancer_detection.cli cnn-train-candidate \
+  --manifest data/interim/picai_manifest.csv \
+  --raw-root data/raw/picai \
+  --architecture cnn_candidate_25d_resnet \
+  --tensor-mode 25d \
+  --sample-size-per-split 0 \
+  --image-size 96 \
+  --slice-window 5 \
+  --max-epochs 10 \
+  --batch-size 8 \
+  --embedding-dim 64 \
+  --augment-train \
+  --device cpu \
+  --embeddings data/features/cnn_candidate_25d_resnet_embeddings.csv \
+  --predictions outputs/reports/cnn_candidate_25d_resnet_predictions.csv \
+  --report outputs/reports/cnn_candidate_25d_resnet_report.json \
+  --model outputs/models/cnn_candidate_25d_resnet_model.pt
+```
+
+Run the 3D candidate only after the small 3D cache check succeeds and runtime is
+acceptable:
+
+```bash
+PYTHONPATH=src python -m prostate_mri_cancer_detection.cli cnn-train-candidate \
+  --manifest data/interim/picai_manifest.csv \
+  --raw-root data/raw/picai \
+  --architecture cnn_candidate_3d_densenet \
+  --tensor-mode 3d \
+  --sample-size-per-split 4 \
+  --image-size 64 \
+  --volume-depth 12 \
+  --max-epochs 1 \
+  --batch-size 2 \
+  --embedding-dim 64 \
+  --augment-train \
+  --device cpu \
+  --embeddings data/features/cnn_candidate_3d_densenet_smoke_embeddings.csv \
+  --predictions outputs/reports/cnn_candidate_3d_densenet_smoke_predictions.csv \
+  --report outputs/reports/cnn_candidate_3d_densenet_smoke_report.json \
+  --model outputs/models/cnn_candidate_3d_densenet_smoke_model.pt
+```
+
 ### Hybrid Radiomics + CNN Baseline
 
 ```bash
@@ -261,7 +384,15 @@ Before final names are assigned:
 
 ## Safe Next Work
 
-The safest next engineering step is to improve CNN calibration and training
-quality while preserving the current split, threshold, and reporting policy.
-Only after that should the project promote any CNN or hybrid filenames from
-provisional to final.
+The safest next engineering step is candidate CNN model selection:
+
+1. Validate tensor preparation for 2.5D and 3D modes.
+2. Run a tiny 2.5D ResNet-style candidate.
+3. Run a controlled 2.5D candidate on all available split cases.
+4. Run a tiny 3D Dense-style candidate if CPU runtime is acceptable.
+5. Re-run aligned hybrid evaluation using the strongest candidate embeddings.
+6. Regenerate the comparison report with bootstrap, paired AUC delta, and
+   calibration diagnostics.
+
+Only after this should any CNN or hybrid filename be promoted from provisional
+to final.
