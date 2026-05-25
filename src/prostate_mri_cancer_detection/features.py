@@ -389,11 +389,33 @@ def choose_reference_grid_mask(
     for mask_value in mask_values:
         mask_path = resolve_manifest_path(mask_value, raw_root)
         mask = sitk.ReadImage(str(mask_path))
-        if not signatures_match(simpleitk_signature(mask), reference_signature):
+        if not mask_matches_reference_for_extraction(mask, reference, reference_signature):
             continue
         if image_has_positive_voxels(mask, sitk):
             return mask_path, mask
     return None, None
+
+
+def mask_matches_reference_for_extraction(
+    mask: Any,
+    reference: Any,
+    reference_signature: dict[str, Any],
+) -> bool:
+    """Return whether a mask can be applied voxelwise to the reference image.
+
+    PI-CAI masks may be stored as NIfTI while images are MetaImage. For the
+    current array-based whole-gland extractor, same size and spacing are the
+    required compatibility checks; stricter physical orientation metadata is
+    tracked in preprocessing reports but not used to reject otherwise usable
+    masks here.
+    """
+
+    mask_signature = simpleitk_signature(mask)
+    return (
+        mask_signature.get("size") == reference_signature.get("size")
+        and floats_close(mask_signature.get("spacing", []), reference_signature.get("spacing", []))
+        and list(mask.GetSize()) == list(reference.GetSize())
+    )
 
 
 def simpleitk_first_order_features(image: Any, mask: Any, sequence: str, sitk: Any) -> dict[str, float]:
@@ -406,6 +428,8 @@ def simpleitk_first_order_features(image: Any, mask: Any, sequence: str, sitk: A
 
     image_array = sitk.GetArrayFromImage(image).astype(float)
     mask_array = sitk.GetArrayFromImage(mask) > 0
+    if image_array.shape != mask_array.shape:
+        raise ValueError(f"{sequence} image/mask array shape mismatch: {image_array.shape} vs {mask_array.shape}")
     values = image_array[mask_array]
     if values.size == 0:
         raise ValueError(f"empty {sequence} gland mask")
