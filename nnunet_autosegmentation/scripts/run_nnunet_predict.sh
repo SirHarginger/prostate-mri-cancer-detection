@@ -31,6 +31,7 @@ values = {
     "CONFIGURATION": nnunet["configuration"],
     "TRAINER": nnunet["trainer"],
     "FOLDS": str(nnunet["folds"]),
+    "DEVICE": str(nnunet.get("device", "cpu")),
 }
 
 for key, value in values.items():
@@ -75,8 +76,11 @@ echo "nnUNet_results=${nnUNet_results}"
 echo "Model: ${MODEL_DIR}"
 echo "Checkpoint: ${CHECKPOINT_NAME}"
 echo "Folds: ${FOLDS}"
+echo "Device: ${DEVICE}"
 echo "Input: ${INPUT_DIR}"
 echo "Output: ${OUTPUT_DIR}"
+
+export CUDA_VISIBLE_DEVICES=""
 
 nnUNetv2_predict \
   -i "${INPUT_DIR}" \
@@ -85,4 +89,7 @@ nnUNetv2_predict \
   -c "${CONFIGURATION}" \
   -tr "${TRAINER}" \
   -chk "${CHECKPOINT_NAME}" \
+  -device "${DEVICE}" \
+  --disable_tta \
+  --not_on_device \
   -f "${FOLD_ARGS[@]}"

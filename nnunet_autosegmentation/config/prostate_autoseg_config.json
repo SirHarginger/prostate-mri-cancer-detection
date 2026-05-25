@@ -15,7 +15,8 @@
     "dataset_label": "Prostate_MRL",
     "trainer": "nnUNetTrainerNoMirroring",
     "configuration": "3d_fullres",
-    "folds": "all"
+    "folds": "all",
+    "device": "cpu"
   },
   "feature_extraction": {
     "image_dir": "nnunet_autosegmentation/data/nnunet_raw/Dataset901_ProstateExternal/imagesTs",
