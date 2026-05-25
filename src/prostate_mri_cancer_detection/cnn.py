@@ -226,7 +226,7 @@ def run_cnn_smoke_training(
     write_embedding_csv(embeddings_path, embedding_rows, embedding_dim)
     write_prediction_csv(predictions_path, prediction_rows)
     write_model_checkpoint(
-        model_path=model_path,
+        path=model_path,
         model=model,
         torch=torch,
         report=report,
