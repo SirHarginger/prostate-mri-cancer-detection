@@ -11,8 +11,8 @@
     "results": "nnunet_autosegmentation/data/nnunet_results",
     "input_dir": "nnunet_autosegmentation/data/nnunet_raw/Dataset901_ProstateExternal/imagesTs",
     "output_dir": "nnunet_autosegmentation/data/external_predictions/prostate_mri",
-    "dataset_id": 901,
-    "dataset_label": "ProstateExternal",
+    "dataset_id": 509,
+    "dataset_label": "Prostate_MRL",
     "trainer": "nnUNetTrainerNoMirroring",
     "configuration": "3d_fullres",
     "folds": "all"
