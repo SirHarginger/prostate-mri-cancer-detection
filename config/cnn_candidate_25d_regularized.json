@@ -1,0 +1,26 @@
+{
+  "manifest": "data/interim/picai_manifest.csv",
+  "raw_root": "data/raw/picai",
+  "architecture": "cnn_candidate_25d_resnet",
+  "tensor_mode": "25d",
+  "sample_size_per_split": 0,
+  "image_size": 96,
+  "slice_window": 5,
+  "max_epochs": 25,
+  "batch_size": 8,
+  "learning_rate": 0.001,
+  "weight_decay": 0.0001,
+  "dropout": 0.2,
+  "early_stopping_patience": 5,
+  "embedding_dim": 64,
+  "augment_train": true,
+  "target_sensitivity": 0.9,
+  "seed": 42,
+  "device": "cpu",
+  "outputs": {
+    "embeddings": "data/features/cnn_candidate_25d_resnet_regularized_seed42_embeddings.csv",
+    "predictions": "outputs/reports/cnn_candidate_25d_resnet_regularized_seed42_predictions.csv",
+    "report": "outputs/reports/cnn_candidate_25d_resnet_regularized_seed42_report.json",
+    "model": "outputs/models/cnn_candidate_25d_resnet_regularized_seed42_model.pt"
+  }
+}

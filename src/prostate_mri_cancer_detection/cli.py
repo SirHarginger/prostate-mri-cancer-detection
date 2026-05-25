@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from prostate_mri_cancer_detection.cnn import (
@@ -764,6 +765,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Train a publication-candidate 2.5D ResNet-style or 3D Dense-style CNN.",
     )
     cnn_candidate_parser.add_argument("--manifest", default="data/interim/picai_manifest.csv", type=Path)
+    cnn_candidate_parser.add_argument(
+        "--config",
+        type=Path,
+        help="Optional JSON config file, usually under config/, for reproducible candidate training.",
+    )
     cnn_candidate_parser.add_argument("--raw-root", default="data/raw/picai", type=Path)
     cnn_candidate_parser.add_argument("--architecture", default="cnn_candidate_25d_resnet", choices=["cnn_candidate_25d_resnet", "cnn_candidate_3d_densenet"])
     cnn_candidate_parser.add_argument("--tensor-mode", default="25d", choices=["25d", "3d"])
@@ -1362,6 +1368,7 @@ def run_cnn_prepare_tensors(args: argparse.Namespace) -> int:
 def run_cnn_candidate(args: argparse.Namespace) -> int:
     """Run publication-candidate CNN training."""
 
+    args = load_cnn_candidate_config(args)
     report = run_cnn_candidate_training(
         manifest_path=args.manifest,
         raw_root=args.raw_root,
@@ -1404,6 +1411,29 @@ def run_cnn_candidate(args: argparse.Namespace) -> int:
     fixed = report["validation_selected_threshold"]["test"]
     print(f"Validation-selected test threshold: status={fixed['status']} metrics={fixed.get('metrics')}")
     return 0
+
+
+def load_cnn_candidate_config(args: argparse.Namespace) -> argparse.Namespace:
+    """Apply an optional JSON config to CNN candidate args."""
+
+    config_path = getattr(args, "config", None)
+    if config_path is None:
+        return args
+
+    with Path(config_path).open("r", encoding="utf-8") as config_file:
+        config = json.load(config_file)
+
+    path_keys = {"manifest", "raw_root", "embeddings", "predictions", "report", "model"}
+    for key, value in config.items():
+        if key == "outputs":
+            for output_key, output_value in value.items():
+                setattr(args, output_key, Path(output_value))
+            continue
+        if key in path_keys:
+            setattr(args, key, Path(value))
+        else:
+            setattr(args, key, value)
+    return args
 
 
 def run_cnn_seed_summary(args: argparse.Namespace) -> int:
