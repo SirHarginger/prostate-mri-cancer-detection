@@ -43,9 +43,37 @@ export nnUNet_results="${NNUNET_RESULTS}"
 
 mkdir -p "${OUTPUT_DIR}"
 
+MODEL_DIR="${NNUNET_RESULTS}/Dataset${DATASET_ID}_${DATASET_LABEL}/${TRAINER}__nnUNetPlans__${CONFIGURATION}"
+CHECKPOINT_NAME="checkpoint_final.pth"
+
+if [[ ! -f "${MODEL_DIR}/fold_${FOLDS}/${CHECKPOINT_NAME}" ]]; then
+  if find "${MODEL_DIR}" -maxdepth 2 -name checkpoint_final.pth -type f | grep -q .; then
+    CHECKPOINT_NAME="checkpoint_final.pth"
+  elif find "${MODEL_DIR}" -maxdepth 2 -name checkpoint_best.pth -type f | grep -q .; then
+    CHECKPOINT_NAME="checkpoint_best.pth"
+  fi
+
+  DETECTED_FOLDS="$(
+    find "${MODEL_DIR}" -maxdepth 2 -path "*/fold_*/${CHECKPOINT_NAME}" -type f \
+      | sed -E 's#.*/fold_([^/]+)/[^/]+#\1#' \
+      | sort -V \
+      | tr '\n' ' ' \
+      | sed 's/[[:space:]]*$//'
+  )"
+
+  if [[ -n "${DETECTED_FOLDS}" ]]; then
+    FOLDS="${DETECTED_FOLDS}"
+  fi
+fi
+
+read -r -a FOLD_ARGS <<< "${FOLDS}"
+
 echo "nnUNet_raw=${nnUNet_raw}"
 echo "nnUNet_preprocessed=${nnUNet_preprocessed}"
 echo "nnUNet_results=${nnUNet_results}"
+echo "Model: ${MODEL_DIR}"
+echo "Checkpoint: ${CHECKPOINT_NAME}"
+echo "Folds: ${FOLDS}"
 echo "Input: ${INPUT_DIR}"
 echo "Output: ${OUTPUT_DIR}"
 
@@ -55,4 +83,5 @@ nnUNetv2_predict \
   -d "${DATASET_ID}" \
   -c "${CONFIGURATION}" \
   -tr "${TRAINER}" \
-  -f "${FOLDS}"
+  -chk "${CHECKPOINT_NAME}" \
+  -f "${FOLD_ARGS[@]}"
