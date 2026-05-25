@@ -15,6 +15,7 @@ from prostate_mri_cancer_detection.data import build_and_write_manifest
 from prostate_mri_cancer_detection.evaluation import (
     generate_evaluation_report,
     generate_model_comparison_report,
+    run_calibrated_fusion_baseline,
     run_feature_baselines,
     run_hybrid_ml_baseline,
     run_radiomics_cv_baseline,
@@ -797,6 +798,53 @@ def build_parser() -> argparse.ArgumentParser:
     cnn_seed_parser.add_argument("--output", default="outputs/reports/cnn_candidate_seed_summary.json", type=Path)
     cnn_seed_parser.set_defaults(func=run_cnn_seed_summary)
 
+    fusion_parser = subparsers.add_parser(
+        "fusion-calibrated-baseline",
+        help="Run validation-selected calibrated probability fusion for radiomics and CNN predictions.",
+    )
+    fusion_parser.add_argument(
+        "--radiomics",
+        default="data/features/radiomics_gland_multisequence_full.csv",
+        type=Path,
+        help="Full multisequence whole-gland radiomics feature table.",
+    )
+    fusion_parser.add_argument(
+        "--cnn-predictions",
+        default="outputs/reports/cnn_candidate_25d_resnet_regularized_seed42_predictions.csv",
+        type=Path,
+        help="CNN candidate prediction CSV output.",
+    )
+    fusion_parser.add_argument(
+        "--cnn-baseline-name",
+        default="cnn_smoke_multisequence",
+        help="Baseline name to select from the CNN prediction CSV.",
+    )
+    fusion_parser.add_argument(
+        "--metrics",
+        default="outputs/reports/fusion_calibrated_metrics.json",
+        type=Path,
+        help="Calibrated fusion metrics JSON output path.",
+    )
+    fusion_parser.add_argument(
+        "--predictions",
+        default="outputs/reports/fusion_calibrated_predictions.csv",
+        type=Path,
+        help="Calibrated fusion prediction CSV output path.",
+    )
+    fusion_parser.add_argument(
+        "--report",
+        default="outputs/reports/fusion_calibrated_report.json",
+        type=Path,
+        help="Calibrated fusion report JSON output path.",
+    )
+    fusion_parser.add_argument(
+        "--target-sensitivity",
+        default=0.90,
+        type=float,
+        help="Target sensitivity for validation-selected threshold analysis.",
+    )
+    fusion_parser.set_defaults(func=run_calibrated_fusion)
+
     hybrid_parser = subparsers.add_parser(
         "hybrid-ml-baseline",
         help="Run aligned radiomics-only, CNN-only, and hybrid ML baselines.",
@@ -1369,6 +1417,34 @@ def run_cnn_seed_summary(args: argparse.Namespace) -> int:
     print(f"Wrote CNN seed summary: {args.output}")
     print(f"Reports summarized: {report['n_reports']}")
     print(f"Summary: {report['summary']}")
+    return 0
+
+
+def run_calibrated_fusion(args: argparse.Namespace) -> int:
+    """Run calibrated probability-level fusion."""
+
+    report = run_calibrated_fusion_baseline(
+        radiomics_path=args.radiomics,
+        cnn_predictions_path=args.cnn_predictions,
+        metrics_path=args.metrics,
+        predictions_path=args.predictions,
+        report_path=args.report,
+        target_sensitivity=args.target_sensitivity,
+        cnn_baseline_name=args.cnn_baseline_name,
+    )
+
+    print(f"Wrote calibrated fusion metrics: {args.metrics}")
+    print(f"Wrote calibrated fusion predictions: {args.predictions}")
+    print(f"Wrote calibrated fusion report: {args.report}")
+    print(f"Case counts: {report['case_counts']}")
+    print(f"Split counts: {report['split_counts']}")
+    print(f"Label counts: {report['label_counts']}")
+    for name, payload in report["baselines"].items():
+        metrics = payload["metrics"]["test"]["metrics"]
+        print(
+            f"{name}: test_auc={metrics['roc_auc']} "
+            f"test_sens={metrics['sensitivity']} test_spec={metrics['specificity']}"
+        )
     return 0
 
 

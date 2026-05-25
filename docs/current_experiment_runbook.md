@@ -353,6 +353,25 @@ hybrid test ROC-AUC: 0.7304
 The hybrid representation modestly improves aligned-subset AUC over radiomics
 alone. This supports continued hybrid development but not a strong final claim.
 
+### Calibrated Probability Fusion
+
+Use calibrated fusion to test whether probability-level fusion improves over
+the regularized CNN candidate without raw feature concatenation:
+
+```bash
+PYTHONPATH=src python -m prostate_mri_cancer_detection.cli fusion-calibrated-baseline \
+  --radiomics data/features/radiomics_gland_multisequence_full.csv \
+  --cnn-predictions outputs/reports/cnn_candidate_25d_resnet_regularized_seed42_predictions.csv \
+  --metrics outputs/reports/fusion_calibrated_seed42_metrics.json \
+  --predictions outputs/reports/fusion_calibrated_seed42_predictions.csv \
+  --report outputs/reports/fusion_calibrated_seed42_report.json \
+  --target-sensitivity 0.90
+```
+
+Repeat for seeds `123` and `2026`. The weighted ensemble alpha and stacked
+probability fusion hyperparameters are selected on validation only. The test
+split is used only for held-out reporting.
+
 ### Current Comparison Report
 
 ```bash

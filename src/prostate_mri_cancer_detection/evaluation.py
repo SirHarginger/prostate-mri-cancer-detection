@@ -644,6 +644,426 @@ def run_hybrid_ml_baseline(
     return report
 
 
+def run_calibrated_fusion_baseline(
+    radiomics_path: str | Path,
+    cnn_predictions_path: str | Path,
+    metrics_path: str | Path,
+    predictions_path: str | Path,
+    report_path: str | Path,
+    target_sensitivity: float = 0.90,
+    cnn_baseline_name: str = "cnn_smoke_multisequence",
+    alpha_grid: list[float] | None = None,
+    c_grid: list[float] | None = None,
+) -> dict[str, Any]:
+    """Run calibrated probability-level fusion using radiomics and CNN predictions."""
+
+    try:
+        import numpy as np
+        from sklearn.impute import SimpleImputer
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import StandardScaler
+    except ImportError as error:  # pragma: no cover - depends on cluster env.
+        raise RuntimeError("NumPy and scikit-learn are required for calibrated fusion") from error
+
+    alpha_grid = alpha_grid or [index / 20 for index in range(21)]
+    c_grid = c_grid or [0.01, 0.1, 1.0, 10.0]
+
+    radiomics_rows = load_csv(radiomics_path)
+    cnn_rows = [
+        row
+        for row in load_csv(cnn_predictions_path)
+        if row.get("status") == "ok" and row.get("baseline", cnn_baseline_name) == cnn_baseline_name
+    ]
+    radiomics_feature_columns = select_probability_fusion_feature_columns(radiomics_rows)
+    aligned_rows, excluded_cases = prepare_probability_fusion_rows(
+        radiomics_rows=radiomics_rows,
+        cnn_rows=cnn_rows,
+        radiomics_feature_columns=radiomics_feature_columns,
+    )
+    if not aligned_rows:
+        raise ValueError("no aligned radiomics and CNN prediction rows were available")
+
+    radiomics_result = train_aligned_logistic_baseline(
+        baseline_name="radiomics_only",
+        aligned_rows=aligned_rows,
+        vector_key="radiomics_vector",
+        feature_names=radiomics_feature_columns,
+        target_sensitivity=target_sensitivity,
+        c_grid=c_grid,
+        np_module=np,
+        SimpleImputer=SimpleImputer,
+        StandardScaler=StandardScaler,
+        LogisticRegression=LogisticRegression,
+        Pipeline=Pipeline,
+    )
+    radiomics_predictions = radiomics_result["predictions"]
+    radiomics_probability_by_case = {
+        row["case_id"]: float(row["probability"])
+        for row in radiomics_predictions
+        if row.get("status") == "ok"
+    }
+
+    cnn_predictions = [
+        probability_prediction_row(
+            baseline_name="cnn_probability_only",
+            row=row,
+            probability=float(row["cnn_probability"]),
+        )
+        for row in aligned_rows
+    ]
+    probability_rows = [
+        {
+            **row,
+            "radiomics_probability": radiomics_probability_by_case[row["case_id"]],
+        }
+        for row in aligned_rows
+        if row["case_id"] in radiomics_probability_by_case
+    ]
+
+    weighted_result = run_weighted_probability_fusion(
+        rows=probability_rows,
+        alpha_grid=alpha_grid,
+        target_sensitivity=target_sensitivity,
+    )
+    for row in probability_rows:
+        row["stacking_vector"] = [row["radiomics_probability"], row["cnn_probability"]]
+    stacked_result = train_aligned_logistic_baseline(
+        baseline_name="stacked_probability_fusion",
+        aligned_rows=probability_rows,
+        vector_key="stacking_vector",
+        feature_names=["radiomics_probability", "cnn_probability"],
+        target_sensitivity=target_sensitivity,
+        c_grid=c_grid,
+        np_module=np,
+        SimpleImputer=SimpleImputer,
+        StandardScaler=StandardScaler,
+        LogisticRegression=LogisticRegression,
+        Pipeline=Pipeline,
+    )
+
+    baseline_reports = {
+        "radiomics_only": radiomics_result["report"],
+        "cnn_probability_only": summarize_calibrated_predictions(cnn_predictions, target_sensitivity),
+        "weighted_probability_fusion": weighted_result["report"],
+        "stacked_probability_fusion": stacked_result["report"],
+    }
+    all_predictions = (
+        radiomics_predictions
+        + cnn_predictions
+        + weighted_result["predictions"]
+        + stacked_result["predictions"]
+    )
+    prediction_groups = {
+        baseline: [row for row in all_predictions if row["baseline"] == baseline and row["split"] == "test"]
+        for baseline in baseline_reports
+    }
+
+    report = {
+        "schema_version": "1.0",
+        "stage": "calibrated_probability_fusion_baseline",
+        "radiomics_path": str(radiomics_path),
+        "cnn_predictions_path": str(cnn_predictions_path),
+        "case_counts": {
+            "radiomics": len(radiomics_rows),
+            "cnn_predictions": len(cnn_rows),
+            "aligned": len(aligned_rows),
+            "excluded": len(excluded_cases),
+        },
+        "split_counts": dict(Counter(row["split"] for row in aligned_rows)),
+        "label_counts": dict(Counter(str(row["label"]) for row in aligned_rows)),
+        "feature_counts": {
+            "radiomics_only": len(radiomics_feature_columns),
+            "cnn_probability_only": 1,
+            "weighted_probability_fusion": 2,
+            "stacked_probability_fusion": 2,
+        },
+        "selection_policy": {
+            "weighted_alpha": "selected on validation ROC-AUC only",
+            "stacking_c": "selected on validation ROC-AUC only",
+            "test_split": "used only for final held-out reporting",
+            "alpha_grid": alpha_grid,
+            "c_grid": c_grid,
+        },
+        "baselines": baseline_reports,
+        "paired_test_auc_deltas": {
+            "weighted_minus_cnn": paired_auc_delta_ci(
+                prediction_groups["weighted_probability_fusion"],
+                prediction_groups["cnn_probability_only"],
+            ),
+            "weighted_minus_radiomics": paired_auc_delta_ci(
+                prediction_groups["weighted_probability_fusion"],
+                prediction_groups["radiomics_only"],
+            ),
+            "stacked_minus_cnn": paired_auc_delta_ci(
+                prediction_groups["stacked_probability_fusion"],
+                prediction_groups["cnn_probability_only"],
+            ),
+            "stacked_minus_radiomics": paired_auc_delta_ci(
+                prediction_groups["stacked_probability_fusion"],
+                prediction_groups["radiomics_only"],
+            ),
+            "cnn_minus_radiomics": paired_auc_delta_ci(
+                prediction_groups["cnn_probability_only"],
+                prediction_groups["radiomics_only"],
+            ),
+        },
+        "excluded_cases": excluded_cases,
+        "claim_limits": [
+            "This is an internal calibrated fusion ablation using existing radiomics and CNN predictions.",
+            "Fusion weights and stacking hyperparameters are selected on validation only.",
+            "No external validation, clinical deployment, lesion localization, or biopsy-reduction claim is supported.",
+        ],
+    }
+
+    write_json(metrics_path, baseline_reports)
+    write_predictions(predictions_path, all_predictions)
+    write_json(report_path, report)
+    return report
+
+
+def select_probability_fusion_feature_columns(rows: list[dict[str, str]]) -> list[str]:
+    """Select numeric radiomics feature columns for calibrated fusion."""
+
+    if not rows:
+        return []
+    columns = []
+    for column in rows[0]:
+        if column in NON_FEATURE_COLUMNS or column.startswith("path_"):
+            continue
+        try:
+            float(rows[0][column])
+        except (TypeError, ValueError):
+            continue
+        columns.append(column)
+    return columns
+
+
+def prepare_probability_fusion_rows(
+    radiomics_rows: list[dict[str, str]],
+    cnn_rows: list[dict[str, str]],
+    radiomics_feature_columns: list[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Align radiomics features and CNN probabilities by case_id."""
+
+    radiomics_by_case = {
+        row["case_id"]: row
+        for row in radiomics_rows
+        if row.get("case_id") and parse_label(row.get("label_cspca", "")) is not None
+    }
+    cnn_by_case = {
+        row["case_id"]: row
+        for row in cnn_rows
+        if row.get("case_id") and row.get("probability") not in {"", None}
+    }
+    aligned_rows = []
+    excluded_cases = []
+    for case_id in sorted(set(radiomics_by_case) | set(cnn_by_case)):
+        radiomics_row = radiomics_by_case.get(case_id)
+        cnn_row = cnn_by_case.get(case_id)
+        if radiomics_row is None or cnn_row is None:
+            excluded_cases.append(
+                {
+                    "case_id": case_id,
+                    "reason": "missing_radiomics" if radiomics_row is None else "missing_cnn_prediction",
+                }
+            )
+            continue
+        radiomics_label = parse_label(radiomics_row.get("label_cspca", ""))
+        cnn_label = int(cnn_row.get("label", radiomics_label))
+        if radiomics_label != cnn_label:
+            excluded_cases.append({"case_id": case_id, "reason": "label_mismatch"})
+            continue
+        try:
+            radiomics_vector = [float(radiomics_row[column]) for column in radiomics_feature_columns]
+            cnn_probability = float(cnn_row["probability"])
+        except (KeyError, TypeError, ValueError) as error:
+            excluded_cases.append({"case_id": case_id, "reason": f"invalid_feature_or_probability:{error}"})
+            continue
+        aligned_rows.append(
+            {
+                "case_id": case_id,
+                "fold": radiomics_row.get("fold", cnn_row.get("fold", "")),
+                "split": cnn_row.get("split", split_for_fold(radiomics_row.get("fold", ""))),
+                "label": int(radiomics_label),
+                "radiomics_vector": radiomics_vector,
+                "cnn_probability": cnn_probability,
+            }
+        )
+    return aligned_rows, excluded_cases
+
+
+def split_for_fold(fold: str) -> str:
+    """Return the project split name for a PI-CAI fold."""
+
+    if fold in {"fold0", "fold1", "fold2"}:
+        return "train"
+    if fold == "fold3":
+        return "validation"
+    if fold == "fold4":
+        return "test"
+    return "unknown"
+
+
+def run_weighted_probability_fusion(
+    rows: list[dict[str, Any]],
+    alpha_grid: list[float],
+    target_sensitivity: float,
+) -> dict[str, Any]:
+    """Select weighted probability fusion alpha on validation and report all splits."""
+
+    validation_rows = [row for row in rows if row["split"] == "validation"]
+    selection = []
+    best_alpha = None
+    best_key = (-1.0, float("-inf"))
+    for alpha in alpha_grid:
+        predictions = [
+            probability_prediction_row(
+                baseline_name="weighted_probability_fusion",
+                row=row,
+                probability=weighted_probability(row, alpha),
+            )
+            for row in validation_rows
+        ]
+        metrics = classification_metrics(predictions)
+        auc = metrics.get("roc_auc")
+        brier = calibration_diagnostics(predictions).get("brier_score")
+        key = (
+            auc if auc is not None else -1.0,
+            -brier if brier is not None else float("-inf"),
+        )
+        selection.append({"alpha": alpha, "roc_auc": auc, "brier_score": brier})
+        if key > best_key:
+            best_key = key
+            best_alpha = alpha
+    if best_alpha is None:
+        raise ValueError("weighted fusion alpha selection failed")
+
+    predictions = [
+        probability_prediction_row(
+            baseline_name="weighted_probability_fusion",
+            row=row,
+            probability=weighted_probability(row, best_alpha),
+        )
+        for row in rows
+    ]
+    report = summarize_calibrated_predictions(predictions, target_sensitivity)
+    report["selected_alpha"] = best_alpha
+    report["validation_selection"] = selection
+    return {"report": report, "predictions": predictions}
+
+
+def weighted_probability(row: dict[str, Any], alpha: float) -> float:
+    """Return alpha-weighted CNN/radiomics probability."""
+
+    return alpha * float(row["cnn_probability"]) + (1 - alpha) * float(row["radiomics_probability"])
+
+
+def probability_prediction_row(
+    baseline_name: str,
+    row: dict[str, Any],
+    probability: float,
+) -> dict[str, str]:
+    """Create a prediction row from a calibrated probability."""
+
+    prediction = 1 if probability >= 0.5 else 0
+    return {
+        "baseline": baseline_name,
+        "case_id": row["case_id"],
+        "fold": row.get("fold", ""),
+        "split": row.get("split", ""),
+        "label": str(row["label"]),
+        "score": format_probability_value(probability),
+        "probability": format_probability_value(probability),
+        "prediction": str(prediction),
+        "status": "ok",
+        "reason": "",
+    }
+
+
+def format_probability_value(value: float) -> str:
+    """Format a probability for stable CSV output."""
+
+    return f"{float(value):.10g}"
+
+
+def summarize_calibrated_predictions(
+    predictions: list[dict[str, str]],
+    target_sensitivity: float,
+) -> dict[str, Any]:
+    """Summarize calibrated prediction rows with validation-selected threshold."""
+
+    validation_rows = [row for row in predictions if row["split"] == "validation"]
+    test_rows = [row for row in predictions if row["split"] == "test"]
+    validation_threshold = fixed_sensitivity_analysis(
+        rows=validation_rows,
+        labels=[int(row["label"]) for row in validation_rows],
+        probabilities=[float(row["probability"]) for row in validation_rows],
+        target_sensitivity=target_sensitivity,
+    )
+    test_fixed = apply_validation_threshold_to_prediction_rows(
+        rows=test_rows,
+        validation_threshold_report=validation_threshold,
+        target_sensitivity=target_sensitivity,
+    )
+    return {
+        "status": "ok",
+        "split_counts": dict(Counter(row["split"] for row in predictions)),
+        "metrics": {
+            split: summarize_prediction_group(
+                [row for row in predictions if row["split"] == split],
+                target_sensitivity=target_sensitivity,
+            )
+            for split in ("train", "validation", "test")
+        },
+        "test_bootstrap_ci": bootstrap_metrics_ci(test_rows),
+        "test_calibration": calibration_diagnostics(test_rows),
+        "validation_selected_threshold": {
+            "validation": validation_threshold,
+            "test": strip_thresholded_rows(test_fixed),
+        },
+    }
+
+
+def apply_validation_threshold_to_prediction_rows(
+    rows: list[dict[str, str]],
+    validation_threshold_report: dict[str, Any],
+    target_sensitivity: float,
+) -> dict[str, Any]:
+    """Apply a validation-selected threshold to prediction rows."""
+
+    if validation_threshold_report.get("status") != "ok":
+        return {
+            "status": "undefined",
+            "target_sensitivity": target_sensitivity,
+            "reason": "validation threshold was not available",
+            "validation_threshold_status": validation_threshold_report.get("status"),
+        }
+    threshold = float(validation_threshold_report["threshold"])
+    labels = [int(row["label"]) for row in rows]
+    probabilities = [float(row["probability"]) for row in rows]
+    predicted = [1 if probability >= threshold else 0 for probability in probabilities]
+    false_positives = [
+        row["case_id"]
+        for row, label, prediction in zip(rows, labels, predicted)
+        if label == 0 and prediction == 1
+    ]
+    false_negatives = [
+        row["case_id"]
+        for row, label, prediction in zip(rows, labels, predicted)
+        if label == 1 and prediction == 0
+    ]
+    return {
+        "status": "ok",
+        "target_sensitivity": target_sensitivity,
+        "threshold_source": "validation",
+        "threshold": threshold,
+        "metrics": threshold_metrics(labels, predicted),
+        "false_positives": false_positives,
+        "false_negatives": false_negatives,
+    }
+
+
 def generate_model_comparison_report(
     radiomics_cv_report_path: str | Path,
     cnn_report_path: str | Path,

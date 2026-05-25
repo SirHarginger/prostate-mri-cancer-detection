@@ -9,6 +9,7 @@ from prostate_mri_cancer_detection.evaluation import (
     bootstrap_metrics_ci,
     calibration_diagnostics,
     paired_auc_delta_ci,
+    run_calibrated_fusion_baseline,
     run_hybrid_ml_baseline,
 )
 
@@ -55,6 +56,45 @@ class HybridMLBaselineTests(unittest.TestCase):
             self.assertTrue(metrics.exists())
             self.assertTrue(report_path.exists())
             self.assertNotIn("label_cspca", report["top_coefficients"]["hybrid_radiomics_cnn"][0]["feature"])
+
+    def test_runs_calibrated_probability_fusion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            radiomics = write_radiomics(root)
+            cnn_predictions = write_cnn_predictions(root)
+            metrics = root / "outputs" / "reports" / "fusion_metrics.json"
+            predictions = root / "outputs" / "reports" / "fusion_predictions.csv"
+            report_path = root / "outputs" / "reports" / "fusion_report.json"
+
+            report = run_calibrated_fusion_baseline(
+                radiomics_path=radiomics,
+                cnn_predictions_path=cnn_predictions,
+                metrics_path=metrics,
+                predictions_path=predictions,
+                report_path=report_path,
+                alpha_grid=[0.0, 0.5, 1.0],
+                c_grid=[0.1, 1.0],
+            )
+
+            prediction_rows = read_csv_rows(predictions)
+
+            self.assertEqual(report["stage"], "calibrated_probability_fusion_baseline")
+            self.assertEqual(report["case_counts"]["aligned"], 8)
+            self.assertEqual(report["case_counts"]["excluded"], 0)
+            self.assertEqual(
+                set(report["baselines"]),
+                {
+                    "radiomics_only",
+                    "cnn_probability_only",
+                    "weighted_probability_fusion",
+                    "stacked_probability_fusion",
+                },
+            )
+            self.assertEqual(len(prediction_rows), 32)
+            self.assertEqual(report["baselines"]["weighted_probability_fusion"]["test_calibration"]["status"], "ok")
+            self.assertIn("weighted_minus_cnn", report["paired_test_auc_deltas"])
+            self.assertTrue(metrics.exists())
+            self.assertTrue(report_path.exists())
 
     def test_metric_rigor_helpers(self) -> None:
         left = prediction_rows("left", [0.1, 0.2, 0.8, 0.9])
@@ -131,6 +171,45 @@ def write_embeddings(root: Path) -> Path:
                     "False",
                     str(0.5 + offset),
                     str(1.5 + offset),
+                ]
+            )
+    return path
+
+
+def write_cnn_predictions(root: Path) -> Path:
+    path = root / "outputs" / "reports" / "cnn_predictions.csv"
+    rows = feature_rows()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(
+            [
+                "baseline",
+                "case_id",
+                "fold",
+                "split",
+                "label",
+                "score",
+                "probability",
+                "prediction",
+                "status",
+                "reason",
+            ]
+        )
+        for case_id, fold, label, offset in rows:
+            probability = 0.2 + offset / 3.0
+            writer.writerow(
+                [
+                    "cnn_smoke_multisequence",
+                    case_id,
+                    fold,
+                    split_for_fold(fold),
+                    str(1 if label == "YES" else 0),
+                    str(probability),
+                    str(probability),
+                    str(1 if probability >= 0.5 else 0),
+                    "ok",
+                    "",
                 ]
             )
     return path
