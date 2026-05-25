@@ -9,6 +9,7 @@ from prostate_mri_cancer_detection.cnn import run_cnn_smoke_training
 from prostate_mri_cancer_detection.data import build_and_write_manifest
 from prostate_mri_cancer_detection.evaluation import (
     generate_evaluation_report,
+    generate_model_comparison_report,
     run_feature_baselines,
     run_hybrid_ml_baseline,
     run_radiomics_cv_baseline,
@@ -784,6 +785,42 @@ def build_parser() -> argparse.ArgumentParser:
     )
     hybrid_parser.set_defaults(func=run_hybrid_ml)
 
+    comparison_parser = subparsers.add_parser(
+        "model-comparison-report",
+        help="Generate a concise comparison report across current radiomics, CNN, and hybrid runs.",
+    )
+    comparison_parser.add_argument(
+        "--radiomics-cv-report",
+        default="outputs/reports/radiomics_cv_report.json",
+        type=Path,
+        help="Rotated-fold radiomics report JSON path.",
+    )
+    comparison_parser.add_argument(
+        "--cnn-report",
+        default="outputs/reports/cnn_baseline_25d_report.json",
+        type=Path,
+        help="Controlled CNN baseline report JSON path.",
+    )
+    comparison_parser.add_argument(
+        "--hybrid-report",
+        default="outputs/reports/hybrid_ml_report.json",
+        type=Path,
+        help="Aligned hybrid report JSON path.",
+    )
+    comparison_parser.add_argument(
+        "--json-report",
+        default="outputs/reports/current_model_comparison.json",
+        type=Path,
+        help="Comparison JSON output path.",
+    )
+    comparison_parser.add_argument(
+        "--markdown-report",
+        default="outputs/reports/current_model_comparison.md",
+        type=Path,
+        help="Comparison Markdown output path.",
+    )
+    comparison_parser.set_defaults(func=run_model_comparison_report)
+
     evaluation_parser = subparsers.add_parser(
         "evaluation-report",
         help="Generate Stage 6 metrics and error-analysis reports from predictions.",
@@ -1219,6 +1256,24 @@ def run_hybrid_ml(args: argparse.Namespace) -> int:
             f"test_spec={test_metrics['specificity']} "
             f"fixed={fixed.get('metrics')}"
         )
+    return 0
+
+
+def run_model_comparison_report(args: argparse.Namespace) -> int:
+    """Run current model comparison report generation."""
+
+    report = generate_model_comparison_report(
+        radiomics_cv_report_path=args.radiomics_cv_report,
+        cnn_report_path=args.cnn_report,
+        hybrid_report_path=args.hybrid_report,
+        output_json_path=args.json_report,
+        output_markdown_path=args.markdown_report,
+    )
+
+    print(f"Wrote model comparison JSON report: {args.json_report}")
+    print(f"Wrote model comparison Markdown report: {args.markdown_report}")
+    for name, payload in report["comparisons"].items():
+        print(f"{name}: scope={payload['scope']}")
     return 0
 
 

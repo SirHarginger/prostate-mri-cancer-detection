@@ -626,6 +626,59 @@ def run_hybrid_ml_baseline(
     return report
 
 
+def generate_model_comparison_report(
+    radiomics_cv_report_path: str | Path,
+    cnn_report_path: str | Path,
+    hybrid_report_path: str | Path,
+    output_json_path: str | Path,
+    output_markdown_path: str | Path,
+) -> dict[str, Any]:
+    """Generate a concise current-methodology comparison report."""
+
+    radiomics_report = read_json(radiomics_cv_report_path)
+    cnn_report = read_json(cnn_report_path)
+    hybrid_report = read_json(hybrid_report_path)
+
+    report = {
+        "schema_version": "1.0",
+        "stage": "current_model_comparison_report",
+        "inputs": {
+            "radiomics_cv_report": str(radiomics_cv_report_path),
+            "cnn_report": str(cnn_report_path),
+            "hybrid_report": str(hybrid_report_path),
+        },
+        "comparisons": {
+            "full_radiomics_cv": summarize_full_radiomics_cv(radiomics_report),
+            "cnn_aligned_subset": summarize_cnn_report(cnn_report),
+            "hybrid_aligned_subset": summarize_hybrid_report(hybrid_report),
+        },
+        "interpretation": {
+            "current_signal": [
+                "Whole-gland multisequence radiomics remains the strongest full-cohort internal reference.",
+                "The 2.5D CNN embeddings show ranking signal but are not yet a tuned final CNN baseline.",
+                "Hybrid radiomics + CNN embeddings modestly improve aligned-subset AUC over radiomics-only.",
+            ],
+            "threshold_caution": [
+                "Validation-selected fixed-sensitivity thresholds did not consistently achieve target sensitivity on held-out test data.",
+                "Fixed-sensitivity behavior should be reported as exploratory threshold analysis, not biopsy-reduction evidence.",
+            ],
+            "next_decision": (
+                "The current evidence supports continuing hybrid development while documenting that "
+                "the observed AUC gain is modest and internal to PI-CAI folds."
+            ),
+        },
+        "claim_limits": [
+            "All results are internal PI-CAI fold or aligned-subset evaluations.",
+            "The radiomics CV result uses all available radiomics rows, while CNN and hybrid results use the CNN-aligned subset.",
+            "No external validation, clinical deployment, lesion localization, radiologist replacement, or biopsy-reduction claim is supported.",
+            "The report is a methodology checkpoint and should be regenerated after any final naming or model-selection cleanup.",
+        ],
+    }
+    write_json(output_json_path, report)
+    write_text(output_markdown_path, markdown_for_model_comparison(report))
+    return report
+
+
 def evaluate_baseline(baseline_name: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Train/evaluate a dependency-free nearest-centroid baseline."""
 
@@ -1291,6 +1344,77 @@ def mean_std(values: list[float]) -> dict[str, Any]:
     return {"mean": mean, "std": math.sqrt(variance), "n": len(values)}
 
 
+def summarize_full_radiomics_cv(report: dict[str, Any]) -> dict[str, Any]:
+    """Extract compact fields from the rotated-fold radiomics report."""
+
+    aggregate = report.get("aggregate", {})
+    pooled = aggregate.get("pooled_test_default", {})
+    fixed = aggregate.get("validation_selected_fixed_sensitivity", {})
+    return {
+        "scope": "full radiomics cohort",
+        "case_counts": report.get("case_counts", {}),
+        "label_counts": report.get("label_counts", {}),
+        "feature_count": report.get("feature_count"),
+        "default_test_metrics": pooled.get("metrics", {}),
+        "validation_selected_fixed_sensitivity": fixed,
+        "fold_metric_summary": aggregate.get("fold_test_metric_summary", {}),
+        "limitations": [
+            "Uses rotated internal PI-CAI folds, not external validation.",
+            "Not directly case-count matched to CNN/hybrid aligned-subset results.",
+        ],
+    }
+
+
+def summarize_cnn_report(report: dict[str, Any]) -> dict[str, Any]:
+    """Extract compact fields from the CNN baseline report."""
+
+    return {
+        "scope": "CNN aligned subset",
+        "case_counts": report.get("case_counts", {}),
+        "label_counts": report.get("label_counts", {}),
+        "model": {
+            "name": report.get("model", {}).get("name"),
+            "training_status": report.get("model", {}).get("training_status"),
+            "input_channels": report.get("model", {}).get("input_channels"),
+            "slice_window": report.get("model", {}).get("slice_window"),
+            "best_epoch": report.get("model", {}).get("best_epoch"),
+        },
+        "default_test_metrics": report.get("metrics", {}).get("test", {}).get("metrics", {}),
+        "validation_selected_fixed_sensitivity": report.get("validation_selected_threshold", {}).get("test", {}),
+        "limitations": [
+            "Uses a small 2.5D CNN architecture and limited training.",
+            "Represents current CNN embeddings, not a final tuned CNN.",
+        ],
+    }
+
+
+def summarize_hybrid_report(report: dict[str, Any]) -> dict[str, Any]:
+    """Extract compact fields from the aligned hybrid report."""
+
+    baselines = report.get("baselines", {})
+    summarized_baselines = {}
+    for name, payload in baselines.items():
+        summarized_baselines[name] = {
+            "selected_c": payload.get("selected_c"),
+            "feature_count": payload.get("feature_count"),
+            "default_test_metrics": payload.get("metrics", {}).get("test", {}).get("metrics", {}),
+            "validation_selected_fixed_sensitivity": payload.get("validation_selected_threshold", {}).get("test", {}),
+        }
+    return {
+        "scope": "radiomics and CNN aligned subset",
+        "case_counts": report.get("case_counts", {}),
+        "label_counts": report.get("label_counts", {}),
+        "split_label_counts": report.get("split_label_counts", {}),
+        "feature_counts": report.get("feature_counts", {}),
+        "baselines": summarized_baselines,
+        "top_hybrid_coefficients": report.get("top_coefficients", {}).get("hybrid_radiomics_cnn", [])[:15],
+        "limitations": [
+            "Limited to cases with CNN embeddings.",
+            "Hybrid gain is internal and modest; further CNN tuning is needed before stronger claims.",
+        ],
+    }
+
+
 def numeric_feature_columns(rows: list[dict[str, str]]) -> list[str]:
     """Return numeric columns that are safe to use as model features."""
 
@@ -1449,6 +1573,14 @@ def write_markdown_report(path: str | Path, report: dict[str, Any]) -> None:
     path.write_text(markdown_for_report(report), encoding="utf-8")
 
 
+def write_text(path: str | Path, content: str) -> None:
+    """Write plain text content."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
 def markdown_for_report(report: dict[str, Any]) -> str:
     """Render a Stage 6 report as Markdown."""
 
@@ -1495,6 +1627,115 @@ def markdown_for_report(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def markdown_for_model_comparison(report: dict[str, Any]) -> str:
+    """Render the current model comparison as Markdown."""
+
+    comparisons = report["comparisons"]
+    radiomics = comparisons["full_radiomics_cv"]
+    cnn = comparisons["cnn_aligned_subset"]
+    hybrid = comparisons["hybrid_aligned_subset"]
+    hybrid_baselines = hybrid["baselines"]
+
+    lines = [
+        "# Current Model Comparison",
+        "",
+        "This report is an internal methodology checkpoint. It is not external validation.",
+        "",
+        "## Summary",
+        "",
+        "| Representation | Scope | n | Test ROC-AUC | Sensitivity | Specificity | Fixed-sensitivity test |",
+        "| --- | --- | ---: | ---: | ---: | ---: | --- |",
+        comparison_row(
+            "Radiomics CV",
+            radiomics["scope"],
+            radiomics.get("case_counts", {}).get("total"),
+            radiomics.get("default_test_metrics", {}),
+            radiomics.get("validation_selected_fixed_sensitivity", {}).get("metrics", {}),
+        ),
+        comparison_row(
+            "CNN 2.5D",
+            cnn["scope"],
+            cnn.get("case_counts", {}).get("loaded"),
+            cnn.get("default_test_metrics", {}),
+            cnn.get("validation_selected_fixed_sensitivity", {}).get("metrics", {}),
+        ),
+        comparison_row(
+            "Aligned radiomics",
+            hybrid["scope"],
+            hybrid.get("case_counts", {}).get("aligned"),
+            hybrid_baselines.get("radiomics_only", {}).get("default_test_metrics", {}),
+            hybrid_baselines.get("radiomics_only", {}).get("validation_selected_fixed_sensitivity", {}).get("metrics", {}),
+        ),
+        comparison_row(
+            "Aligned CNN embeddings",
+            hybrid["scope"],
+            hybrid.get("case_counts", {}).get("aligned"),
+            hybrid_baselines.get("cnn_embedding_only", {}).get("default_test_metrics", {}),
+            hybrid_baselines.get("cnn_embedding_only", {}).get("validation_selected_fixed_sensitivity", {}).get("metrics", {}),
+        ),
+        comparison_row(
+            "Aligned hybrid",
+            hybrid["scope"],
+            hybrid.get("case_counts", {}).get("aligned"),
+            hybrid_baselines.get("hybrid_radiomics_cnn", {}).get("default_test_metrics", {}),
+            hybrid_baselines.get("hybrid_radiomics_cnn", {}).get("validation_selected_fixed_sensitivity", {}).get("metrics", {}),
+        ),
+        "",
+        "## Interpretation",
+        "",
+    ]
+    for item in report["interpretation"]["current_signal"]:
+        lines.append(f"- {item}")
+    lines.extend(["", "## Threshold Caution", ""])
+    for item in report["interpretation"]["threshold_caution"]:
+        lines.append(f"- {item}")
+    lines.extend(["", "## Top Hybrid Coefficients", ""])
+    for row in hybrid.get("top_hybrid_coefficients", [])[:10]:
+        lines.append(
+            f"- `{row.get('feature')}`: coefficient={row.get('coefficient')}, "
+            f"abs={row.get('abs_coefficient')}"
+        )
+    lines.extend(["", "## Claim Limits", ""])
+    for item in report["claim_limits"]:
+        lines.append(f"- {item}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def comparison_row(
+    name: str,
+    scope: str,
+    n_value: Any,
+    default_metrics: dict[str, Any],
+    fixed_metrics: dict[str, Any],
+) -> str:
+    """Render one Markdown comparison row."""
+
+    fixed_summary = (
+        f"sens={metric_string(fixed_metrics.get('sensitivity'))}, "
+        f"spec={metric_string(fixed_metrics.get('specificity'))}"
+        if fixed_metrics
+        else "unavailable"
+    )
+    return (
+        f"| {name} | {scope} | {n_value} | "
+        f"{metric_string(default_metrics.get('roc_auc'))} | "
+        f"{metric_string(default_metrics.get('sensitivity'))} | "
+        f"{metric_string(default_metrics.get('specificity'))} | "
+        f"{fixed_summary} |"
+    )
+
+
+def metric_string(value: Any) -> str:
+    """Format metrics for Markdown tables."""
+
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return f"{value:.4f}"
+    return str(value)
+
+
 def write_json(path: str | Path, payload: dict[str, Any]) -> None:
     """Write JSON payload."""
 
@@ -1503,6 +1744,13 @@ def write_json(path: str | Path, payload: dict[str, Any]) -> None:
     with path.open("w", encoding="utf-8") as json_file:
         json.dump(payload, json_file, indent=2, sort_keys=True)
         json_file.write("\n")
+
+
+def read_json(path: str | Path) -> dict[str, Any]:
+    """Read a JSON object from disk."""
+
+    with Path(path).open("r", encoding="utf-8") as json_file:
+        return json.load(json_file)
 
 
 def is_float(value: str) -> bool:
