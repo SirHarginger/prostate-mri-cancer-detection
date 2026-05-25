@@ -135,6 +135,60 @@ def run_feature_baselines(
     return report
 
 
+def generate_evaluation_report(
+    predictions_path: str | Path,
+    report_json_path: str | Path,
+    report_markdown_path: str | Path,
+    target_sensitivity: float = 0.90,
+) -> dict[str, Any]:
+    """Generate a Stage 6 evaluation report from prediction rows."""
+
+    predictions = [
+        row
+        for row in load_csv(predictions_path)
+        if row.get("status") == "ok"
+    ]
+    grouped: dict[str, dict[str, list[dict[str, str]]]] = {}
+    for row in predictions:
+        grouped.setdefault(row["baseline"], {}).setdefault(row["split"], []).append(row)
+
+    baselines: dict[str, Any] = {}
+    for baseline, split_rows in sorted(grouped.items()):
+        baselines[baseline] = {}
+        for split, rows in sorted(split_rows.items()):
+            baselines[baseline][split] = summarize_prediction_group(
+                rows,
+                target_sensitivity=target_sensitivity,
+            )
+
+    report = {
+        "schema_version": "1.0",
+        "stage": "evaluation_and_ablation_report",
+        "predictions_path": str(predictions_path),
+        "target_sensitivity": target_sensitivity,
+        "total_prediction_rows": len(predictions),
+        "baselines": baselines,
+        "ablation_status": {
+            "radiomics_only": "available if present in predictions",
+            "prototype_embedding_only": "prototype only; not a trained CNN baseline",
+            "hybrid_radiomics_embedding": "prototype only; not a final hybrid model",
+            "sequence_contribution": "not implemented until ADC/HBV resampling and extraction are available",
+            "augmentation_with_vs_without": "not implemented; Stage 4 only validates leakage guards",
+            "pirads_comparison": "not implemented; requires verified PI-RADS linkage and threshold policy",
+        },
+        "claim_limits": [
+            "This report summarizes prototype prediction outputs only.",
+            "Do not describe these results as final radiomics, CNN, or hybrid performance.",
+            "Do not claim external validation, lesion localization, clinical deployment readiness, or biopsy reduction.",
+            "Fixed-sensitivity false-positive counts are exploratory and do not support biopsy-reduction claims by themselves.",
+        ],
+    }
+
+    write_json(report_json_path, report)
+    write_markdown_report(report_markdown_path, report)
+    return report
+
+
 def evaluate_baseline(baseline_name: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Train/evaluate a dependency-free nearest-centroid baseline."""
 
@@ -252,6 +306,117 @@ def classification_metrics(predictions: list[dict[str, str]]) -> dict[str, Any]:
         "specificity": specificity,
         "f1": f1,
         "roc_auc": roc_auc(labels, probabilities),
+        "confusion_matrix": {"tp": tp, "tn": tn, "fp": fp, "fn": fn},
+    }
+
+
+def summarize_prediction_group(
+    rows: list[dict[str, str]],
+    target_sensitivity: float,
+) -> dict[str, Any]:
+    """Summarize metrics, errors, and fixed-sensitivity behavior for rows."""
+
+    default_metrics = classification_metrics(rows)
+    labels = [int(row["label"]) for row in rows]
+    probabilities = [float(row["probability"]) for row in rows]
+    predictions = [int(row["prediction"]) for row in rows]
+    false_positives = [
+        row["case_id"]
+        for row, label, prediction in zip(rows, labels, predictions)
+        if label == 0 and prediction == 1
+    ]
+    false_negatives = [
+        row["case_id"]
+        for row, label, prediction in zip(rows, labels, predictions)
+        if label == 1 and prediction == 0
+    ]
+
+    return {
+        "default_threshold": 0.5,
+        "metrics": default_metrics,
+        "false_positives": false_positives,
+        "false_negatives": false_negatives,
+        "fixed_sensitivity": fixed_sensitivity_analysis(
+            rows=rows,
+            labels=labels,
+            probabilities=probabilities,
+            target_sensitivity=target_sensitivity,
+        ),
+    }
+
+
+def fixed_sensitivity_analysis(
+    rows: list[dict[str, str]],
+    labels: list[int],
+    probabilities: list[float],
+    target_sensitivity: float,
+) -> dict[str, Any]:
+    """Find the highest-specificity threshold that reaches target sensitivity."""
+
+    positives = sum(labels)
+    negatives = len(labels) - positives
+    if positives == 0 or negatives == 0:
+        return {
+            "status": "undefined",
+            "reason": "requires at least one positive and one negative case",
+        }
+
+    thresholds = sorted(set(probabilities + [0.0, 1.0]), reverse=True)
+    candidates = []
+    for threshold in thresholds:
+        predicted = [1 if probability >= threshold else 0 for probability in probabilities]
+        metrics = threshold_metrics(labels, predicted)
+        if metrics["sensitivity"] is not None and metrics["sensitivity"] >= target_sensitivity:
+            candidates.append((threshold, metrics, predicted))
+
+    if not candidates:
+        return {
+            "status": "not_reached",
+            "target_sensitivity": target_sensitivity,
+        }
+
+    threshold, metrics, predicted = max(
+        candidates,
+        key=lambda item: (
+            item[1]["specificity"] if item[1]["specificity"] is not None else -1,
+            item[0],
+        ),
+    )
+    false_positives = [
+        row["case_id"]
+        for row, label, prediction in zip(rows, labels, predicted)
+        if label == 0 and prediction == 1
+    ]
+    false_negatives = [
+        row["case_id"]
+        for row, label, prediction in zip(rows, labels, predicted)
+        if label == 1 and prediction == 0
+    ]
+    return {
+        "status": "ok",
+        "target_sensitivity": target_sensitivity,
+        "threshold": threshold,
+        "metrics": metrics,
+        "false_positives": false_positives,
+        "false_negatives": false_negatives,
+    }
+
+
+def threshold_metrics(labels: list[int], predicted: list[int]) -> dict[str, Any]:
+    """Compute metrics for thresholded predictions."""
+
+    tp = sum(1 for label, pred in zip(labels, predicted) if label == 1 and pred == 1)
+    tn = sum(1 for label, pred in zip(labels, predicted) if label == 0 and pred == 0)
+    fp = sum(1 for label, pred in zip(labels, predicted) if label == 0 and pred == 1)
+    fn = sum(1 for label, pred in zip(labels, predicted) if label == 1 and pred == 0)
+    precision = safe_divide(tp, tp + fp)
+    sensitivity = safe_divide(tp, tp + fn)
+    specificity = safe_divide(tn, tn + fp)
+    return {
+        "precision": precision,
+        "sensitivity": sensitivity,
+        "specificity": specificity,
+        "f1": f1_score(precision, sensitivity),
         "confusion_matrix": {"tp": tp, "tn": tn, "fp": fp, "fn": fn},
     }
 
@@ -395,6 +560,60 @@ def write_predictions(path: str | Path, rows: list[dict[str, str]]) -> None:
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def write_markdown_report(path: str | Path, report: dict[str, Any]) -> None:
+    """Write a concise Markdown evaluation report."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(markdown_for_report(report), encoding="utf-8")
+
+
+def markdown_for_report(report: dict[str, Any]) -> str:
+    """Render a Stage 6 report as Markdown."""
+
+    lines = [
+        "# Prototype Evaluation Report",
+        "",
+        "This report summarizes prototype prediction outputs only. It is not a final scientific result.",
+        "",
+        f"Target sensitivity for fixed-sensitivity analysis: {report['target_sensitivity']}",
+        "",
+        "## Baselines",
+        "",
+    ]
+    for baseline, splits in report["baselines"].items():
+        lines.extend([f"### {baseline}", ""])
+        for split, payload in splits.items():
+            metrics = payload["metrics"]
+            confusion = metrics.get("confusion_matrix", {})
+            lines.extend(
+                [
+                    f"- Split: `{split}`",
+                    f"- n: {metrics.get('n')}",
+                    f"- ROC-AUC: {metrics.get('roc_auc')}",
+                    f"- Sensitivity: {metrics.get('sensitivity')}",
+                    f"- Specificity: {metrics.get('specificity')}",
+                    f"- Precision: {metrics.get('precision')}",
+                    f"- F1: {metrics.get('f1')}",
+                    f"- Confusion matrix: {confusion}",
+                    f"- False positives: {payload['false_positives']}",
+                    f"- False negatives: {payload['false_negatives']}",
+                    f"- Fixed-sensitivity analysis: {payload['fixed_sensitivity']}",
+                    "",
+                ]
+            )
+
+    lines.extend(
+        [
+            "## Claim Limits",
+            "",
+            *[f"- {item}" for item in report["claim_limits"]],
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def write_json(path: str | Path, payload: dict[str, Any]) -> None:

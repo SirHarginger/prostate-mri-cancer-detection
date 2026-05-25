@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 
 from prostate_mri_cancer_detection.data import build_and_write_manifest
-from prostate_mri_cancer_detection.evaluation import run_feature_baselines
+from prostate_mri_cancer_detection.evaluation import generate_evaluation_report, run_feature_baselines
 from prostate_mri_cancer_detection.features import extract_radiomics_features
 from prostate_mri_cancer_detection.modeling import extract_embedding_table
 from prostate_mri_cancer_detection.preprocessing import validate_preprocessing_inputs
@@ -275,6 +275,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Baseline validation report JSON output path.",
     )
     baseline_parser.set_defaults(func=run_baseline_evaluate)
+
+    evaluation_parser = subparsers.add_parser(
+        "evaluation-report",
+        help="Generate Stage 6 metrics and error-analysis reports from predictions.",
+    )
+    evaluation_parser.add_argument(
+        "--predictions",
+        default="outputs/reports/prototype_baseline_predictions.csv",
+        type=Path,
+        help="Prediction CSV from Stage 5 baseline evaluation.",
+    )
+    evaluation_parser.add_argument(
+        "--json-report",
+        default="outputs/reports/prototype_evaluation_report.json",
+        type=Path,
+        help="Structured JSON evaluation report path.",
+    )
+    evaluation_parser.add_argument(
+        "--markdown-report",
+        default="outputs/reports/prototype_evaluation_report.md",
+        type=Path,
+        help="Markdown evaluation report path.",
+    )
+    evaluation_parser.add_argument(
+        "--target-sensitivity",
+        default=0.90,
+        type=float,
+        help="Target sensitivity for fixed-sensitivity analysis.",
+    )
+    evaluation_parser.set_defaults(func=run_evaluation_report)
     return parser
 
 
@@ -398,6 +428,24 @@ def run_baseline_evaluate(args: argparse.Namespace) -> int:
     print(f"Label counts: {report['label_counts']}")
     for name, metrics in report["metrics"].items():
         print(f"{name}: {metrics.get('status')}")
+    return 0
+
+
+def run_evaluation_report(args: argparse.Namespace) -> int:
+    """Run Stage 6 evaluation report generation."""
+
+    report = generate_evaluation_report(
+        predictions_path=args.predictions,
+        report_json_path=args.json_report,
+        report_markdown_path=args.markdown_report,
+        target_sensitivity=args.target_sensitivity,
+    )
+
+    print(f"Wrote evaluation JSON report: {args.json_report}")
+    print(f"Wrote evaluation Markdown report: {args.markdown_report}")
+    print(f"Prediction rows summarized: {report['total_prediction_rows']}")
+    for baseline, splits in report["baselines"].items():
+        print(f"{baseline}: {sorted(splits)}")
     return 0
 
 
