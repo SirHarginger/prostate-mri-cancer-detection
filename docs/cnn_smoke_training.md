@@ -59,7 +59,10 @@ For each selected case:
 ## Reported Outputs
 
 - split and label counts
+- per-epoch train and validation loss/metrics
+- best epoch selected by validation ROC-AUC, then validation loss
 - train/validation/test metrics
+- validation-selected fixed-sensitivity threshold applied to the held-out test split
 - augmentation leakage check
 - per-case loading failures
 - CNN embeddings
@@ -72,3 +75,29 @@ For each selected case:
 - It is not a final CNN-only baseline.
 - It does not support hybrid-model, lesion-localization, clinical deployment, or
   biopsy-reduction claims.
+
+## Controlled Baseline Command
+
+After the smoke run succeeds, the same validated data path can be used for a
+larger controlled baseline:
+
+```bash
+PYTHONPATH=src python -m prostate_mri_cancer_detection.cli cnn-train-baseline \
+  --manifest data/interim/picai_manifest.csv \
+  --raw-root data/raw/picai \
+  --sample-size-per-split 96 \
+  --image-size 96 \
+  --max-epochs 5 \
+  --batch-size 8 \
+  --embedding-dim 32 \
+  --augment-train \
+  --device cpu \
+  --embeddings data/features/cnn_baseline_embeddings.csv \
+  --predictions outputs/reports/cnn_baseline_predictions.csv \
+  --report outputs/reports/cnn_baseline_report.json \
+  --model outputs/models/cnn_baseline_model.pt
+```
+
+This is still an internal CNN baseline. It should be compared cautiously against
+the radiomics-only baseline because it uses a small 2D model and limited
+training, not a tuned production CNN.

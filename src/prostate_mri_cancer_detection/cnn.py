@@ -18,8 +18,10 @@ from typing import Any, Iterable
 
 from prostate_mri_cancer_detection.evaluation import (
     classification_metrics,
+    fixed_sensitivity_analysis,
     parse_label,
     summarize_prediction_group,
+    threshold_metrics,
 )
 from prostate_mri_cancer_detection.preprocessing import (
     image_has_positive_voxels,
@@ -62,6 +64,10 @@ def run_cnn_smoke_training(
     target_sensitivity: float = 0.90,
     seed: int = 42,
     device_name: str = "cpu",
+    stage_name: str = "cnn_smoke_training",
+    training_status: str = "smoke_trained",
+    encoder_name: str = "tiny_multisequence_cnn_smoke_v1",
+    encoder_type: str = "smoke_trained_cnn",
 ) -> dict[str, Any]:
     """Run a tiny multisequence CNN smoke training pass."""
 
@@ -120,8 +126,11 @@ def run_cnn_smoke_training(
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     pos_weight = positive_class_weight(split_examples["train"], torch, device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    epoch_losses = []
-    for _epoch in range(max(0, max_epochs)):
+    epoch_history = []
+    best_epoch = 0
+    best_state = clone_state_dict(model, torch)
+    best_key = (-1.0, float("-inf"))
+    for epoch_index in range(max(0, max_epochs)):
         model.train()
         losses = []
         for images, labels, _case_ids in train_loader:
@@ -133,7 +142,48 @@ def run_cnn_smoke_training(
             loss.backward()
             optimizer.step()
             losses.append(float(loss.detach().cpu().item()))
-        epoch_losses.append(sum(losses) / len(losses) if losses else None)
+        train_evaluation = evaluate_split_for_history(
+            examples=split_examples["train"],
+            model=model,
+            dataset_class=dataset_class,
+            DataLoader=DataLoader,
+            torch=torch,
+            device=device,
+            batch_size=batch_size,
+            criterion=criterion,
+        )
+        validation_evaluation = evaluate_split_for_history(
+            examples=split_examples["validation"],
+            model=model,
+            dataset_class=dataset_class,
+            DataLoader=DataLoader,
+            torch=torch,
+            device=device,
+            batch_size=batch_size,
+            criterion=criterion,
+        )
+        validation_auc = validation_evaluation["metrics"].get("roc_auc")
+        validation_loss = validation_evaluation["loss"]
+        candidate_key = (
+            validation_auc if validation_auc is not None else -1.0,
+            -validation_loss if validation_loss is not None else float("-inf"),
+        )
+        if candidate_key > best_key:
+            best_key = candidate_key
+            best_epoch = epoch_index + 1
+            best_state = clone_state_dict(model, torch)
+        epoch_history.append(
+            {
+                "epoch": epoch_index + 1,
+                "train_loss_augmented_batches": sum(losses) / len(losses) if losses else None,
+                "train_loss_unaugmented": train_evaluation["loss"],
+                "validation_loss": validation_evaluation["loss"],
+                "train_metrics": train_evaluation["metrics"],
+                "validation_metrics": validation_evaluation["metrics"],
+            }
+        )
+    if best_state:
+        model.load_state_dict(best_state)
 
     prediction_rows, embedding_rows = evaluate_cnn_examples(
         examples=examples,
@@ -144,6 +194,8 @@ def run_cnn_smoke_training(
         device=device,
         batch_size=batch_size,
         embedding_dim=embedding_dim,
+        encoder_name=encoder_name,
+        encoder_type=encoder_type,
     )
     metrics_by_split = {
         split: summarize_prediction_group(
@@ -152,6 +204,19 @@ def run_cnn_smoke_training(
         )
         for split in ("train", "validation", "test")
     }
+    validation_rows = [row for row in prediction_rows if row["split"] == "validation"]
+    test_rows = [row for row in prediction_rows if row["split"] == "test"]
+    validation_fixed = fixed_sensitivity_analysis(
+        rows=validation_rows,
+        labels=[int(row["label"]) for row in validation_rows],
+        probabilities=[float(row["probability"]) for row in validation_rows],
+        target_sensitivity=target_sensitivity,
+    )
+    test_fixed = apply_validation_threshold_to_rows(
+        rows=test_rows,
+        validation_threshold_report=validation_fixed,
+        target_sensitivity=target_sensitivity,
+    )
     summary = {
         "selected_cases": len(selected_rows),
         "examples_loaded": len(examples),
@@ -162,7 +227,7 @@ def run_cnn_smoke_training(
     }
     report = {
         "schema_version": "1.0",
-        "stage": "cnn_smoke_training",
+        "stage": stage_name,
         "manifest_path": str(manifest_path),
         "raw_root": str(raw_root),
         "summary": summary,
@@ -179,7 +244,7 @@ def run_cnn_smoke_training(
         },
         "model": {
             "name": "TinyMultisequenceCNN",
-            "training_status": "smoke_trained",
+            "training_status": training_status,
             "input_channels": 3,
             "input_sequences": ["t2w", "adc_resampled_to_t2w", "hbv_resampled_to_t2w"],
             "image_size": image_size,
@@ -189,7 +254,9 @@ def run_cnn_smoke_training(
             "learning_rate": learning_rate,
             "seed": seed,
             "device": str(device),
-            "epoch_losses": epoch_losses,
+            "best_epoch": best_epoch,
+            "best_selection_metric": "validation ROC-AUC, then lower validation loss",
+            "epoch_history": epoch_history,
         },
         "split_policy": SPLIT_BY_FOLD,
         "augmentation_policy": {
@@ -208,6 +275,10 @@ def run_cnn_smoke_training(
             "writes_processed_images": False,
         },
         "metrics": metrics_by_split,
+        "validation_selected_threshold": {
+            "validation": validation_fixed,
+            "test": test_fixed,
+        },
         "overall_loaded_metrics": classification_metrics(prediction_rows),
         "failures": failures,
         "output_paths": {
@@ -517,6 +588,114 @@ def positive_class_weight(examples: list[dict[str, Any]], torch: Any, device: An
     return torch.tensor([weight], dtype=torch.float32, device=device)
 
 
+def clone_state_dict(model: Any, torch: Any) -> dict[str, Any]:
+    """Clone a model state dict onto CPU for best-epoch restoration."""
+
+    return {
+        key: value.detach().cpu().clone()
+        for key, value in model.state_dict().items()
+    }
+
+
+def evaluate_split_for_history(
+    examples: list[dict[str, Any]],
+    model: Any,
+    dataset_class: Any,
+    DataLoader: Any,
+    torch: Any,
+    device: Any,
+    batch_size: int,
+    criterion: Any,
+) -> dict[str, Any]:
+    """Evaluate one split without augmentation for epoch history."""
+
+    if not examples:
+        return {
+            "loss": None,
+            "metrics": {"n": 0, "status": "no_predictions"},
+        }
+
+    dataset = dataset_class(examples, augment=False, seed=0)
+    loader = DataLoader(dataset, batch_size=max(1, batch_size), shuffle=False, num_workers=0)
+    examples_by_case = {example["case_id"]: example for example in examples}
+    rows = []
+    total_loss = 0.0
+    total_count = 0
+    model.eval()
+    with torch.no_grad():
+        for images, labels, case_ids in loader:
+            images = images.to(device)
+            labels = labels.to(device)
+            logits, _embeddings = model(images)
+            loss = criterion(logits, labels)
+            batch_size_observed = int(labels.shape[0])
+            total_loss += float(loss.detach().cpu().item()) * batch_size_observed
+            total_count += batch_size_observed
+            probabilities = torch.sigmoid(logits).detach().cpu().tolist()
+            for case_id, probability in zip(case_ids, probabilities):
+                example = examples_by_case[str(case_id)]
+                prediction = 1 if float(probability) >= 0.5 else 0
+                rows.append(
+                    {
+                        "baseline": "cnn_multisequence_epoch",
+                        "case_id": example["case_id"],
+                        "fold": example["fold"],
+                        "split": example["split"],
+                        "label": str(example["label"]),
+                        "score": format_float(float(probability)),
+                        "probability": format_float(float(probability)),
+                        "prediction": str(prediction),
+                        "status": "ok",
+                        "reason": "",
+                    }
+                )
+    model.train()
+    return {
+        "loss": total_loss / total_count if total_count else None,
+        "metrics": classification_metrics(rows),
+    }
+
+
+def apply_validation_threshold_to_rows(
+    rows: list[dict[str, str]],
+    validation_threshold_report: dict[str, Any],
+    target_sensitivity: float,
+) -> dict[str, Any]:
+    """Apply a validation-selected threshold to held-out rows."""
+
+    if validation_threshold_report.get("status") != "ok":
+        return {
+            "status": "undefined",
+            "target_sensitivity": target_sensitivity,
+            "reason": "validation threshold was not available",
+            "validation_threshold_status": validation_threshold_report.get("status"),
+        }
+
+    threshold = float(validation_threshold_report["threshold"])
+    labels = [int(row["label"]) for row in rows]
+    probabilities = [float(row["probability"]) for row in rows]
+    predicted = [1 if probability >= threshold else 0 for probability in probabilities]
+    false_positives = [
+        row["case_id"]
+        for row, label, prediction in zip(rows, labels, predicted)
+        if label == 0 and prediction == 1
+    ]
+    false_negatives = [
+        row["case_id"]
+        for row, label, prediction in zip(rows, labels, predicted)
+        if label == 1 and prediction == 0
+    ]
+    return {
+        "status": "ok",
+        "target_sensitivity": target_sensitivity,
+        "threshold_source": "validation",
+        "threshold": threshold,
+        "metrics": threshold_metrics(labels, predicted),
+        "false_positives": false_positives,
+        "false_negatives": false_negatives,
+    }
+
+
 def evaluate_cnn_examples(
     examples: list[dict[str, Any]],
     model: Any,
@@ -526,6 +705,8 @@ def evaluate_cnn_examples(
     device: Any,
     batch_size: int,
     embedding_dim: int,
+    encoder_name: str,
+    encoder_type: str,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Run unaugmented inference and return prediction and embedding rows."""
 
@@ -563,8 +744,8 @@ def evaluate_cnn_examples(
                     "fold": example["fold"],
                     "split": example["split"],
                     "label_cspca": example["label_cspca"],
-                    "encoder_name": "tiny_multisequence_cnn_smoke_v1",
-                    "encoder_type": "smoke_trained_cnn",
+                    "encoder_name": encoder_name,
+                    "encoder_type": encoder_type,
                     "augmentation_applied": "False",
                 }
                 for index in range(embedding_dim):

@@ -611,6 +611,117 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cnn_parser.set_defaults(func=run_cnn_smoke)
 
+    cnn_baseline_parser = subparsers.add_parser(
+        "cnn-train-baseline",
+        help="Run a controlled multisequence CNN baseline on a configurable sample.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--manifest",
+        default="data/interim/picai_manifest.csv",
+        type=Path,
+        help="Stage 1 manifest CSV path.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--raw-root",
+        default="data/raw/picai",
+        type=Path,
+        help="Path to the local PI-CAI raw root.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--embeddings",
+        default="data/features/cnn_baseline_embeddings.csv",
+        type=Path,
+        help="CNN baseline embedding table output path.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--predictions",
+        default="outputs/reports/cnn_baseline_predictions.csv",
+        type=Path,
+        help="CNN baseline prediction CSV output path.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--report",
+        default="outputs/reports/cnn_baseline_report.json",
+        type=Path,
+        help="CNN baseline report JSON output path.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--model",
+        default="outputs/models/cnn_baseline_model.pt",
+        type=Path,
+        help="Ignored baseline-model checkpoint output path.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--sample-size-per-split",
+        default=96,
+        type=int,
+        help="Balanced cases per split when --all-cases is not used.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--case-id",
+        action="append",
+        default=[],
+        help="Specific case ID to include. Can be provided multiple times.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--all-cases",
+        action="store_true",
+        help="Use all manifest cases.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--image-size",
+        default=96,
+        type=int,
+        help="Square 2D crop size for CNN input.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--max-epochs",
+        default=5,
+        type=int,
+        help="Number of training epochs.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--batch-size",
+        default=8,
+        type=int,
+        help="Mini-batch size.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--learning-rate",
+        default=1e-3,
+        type=float,
+        help="Adam learning rate.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--embedding-dim",
+        default=32,
+        type=int,
+        help="CNN embedding dimension.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--augment-train",
+        action="store_true",
+        help="Apply deterministic augmentation to training rows only.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--target-sensitivity",
+        default=0.90,
+        type=float,
+        help="Target sensitivity for validation-selected threshold analysis.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--seed",
+        default=42,
+        type=int,
+        help="Random seed.",
+    )
+    cnn_baseline_parser.add_argument(
+        "--device",
+        default="cpu",
+        help="Torch device, for example cpu, cuda, or auto.",
+    )
+    cnn_baseline_parser.set_defaults(func=run_cnn_baseline)
+
     evaluation_parser = subparsers.add_parser(
         "evaluation-report",
         help="Generate Stage 6 metrics and error-analysis reports from predictions.",
@@ -962,9 +1073,56 @@ def run_cnn_smoke(args: argparse.Namespace) -> int:
     print(f"Summary: {report['summary']}")
     print(f"Case counts: {report['case_counts']}")
     print(f"Label counts: {report['label_counts']}")
+    print(f"Best epoch: {report['model']['best_epoch']}")
     for split, payload in report["metrics"].items():
         metrics = payload["metrics"]
         print(f"{split}: n={metrics['n']} auc={metrics['roc_auc']} sens={metrics['sensitivity']} spec={metrics['specificity']}")
+    fixed = report["validation_selected_threshold"]["test"]
+    print(f"Validation-selected test threshold: status={fixed['status']} metrics={fixed.get('metrics')}")
+    return 0
+
+
+def run_cnn_baseline(args: argparse.Namespace) -> int:
+    """Run controlled CNN baseline training."""
+
+    report = run_cnn_smoke_training(
+        manifest_path=args.manifest,
+        raw_root=args.raw_root,
+        embeddings_path=args.embeddings,
+        predictions_path=args.predictions,
+        report_path=args.report,
+        model_path=args.model,
+        sample_size_per_split=args.sample_size_per_split,
+        image_size=args.image_size,
+        max_epochs=args.max_epochs,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        embedding_dim=args.embedding_dim,
+        augment_train=args.augment_train,
+        all_cases=args.all_cases,
+        case_ids=args.case_id,
+        target_sensitivity=args.target_sensitivity,
+        seed=args.seed,
+        device_name=args.device,
+        stage_name="cnn_baseline_training",
+        training_status="baseline_trained",
+        encoder_name="tiny_multisequence_cnn_baseline_v1",
+        encoder_type="baseline_trained_cnn",
+    )
+
+    print(f"Wrote CNN baseline embeddings: {args.embeddings}")
+    print(f"Wrote CNN baseline predictions: {args.predictions}")
+    print(f"Wrote CNN baseline report: {args.report}")
+    print(f"Wrote CNN baseline model: {args.model}")
+    print(f"Summary: {report['summary']}")
+    print(f"Case counts: {report['case_counts']}")
+    print(f"Label counts: {report['label_counts']}")
+    print(f"Best epoch: {report['model']['best_epoch']}")
+    for split, payload in report["metrics"].items():
+        metrics = payload["metrics"]
+        print(f"{split}: n={metrics['n']} auc={metrics['roc_auc']} sens={metrics['sensitivity']} spec={metrics['specificity']}")
+    fixed = report["validation_selected_threshold"]["test"]
+    print(f"Validation-selected test threshold: status={fixed['status']} metrics={fixed.get('metrics')}")
     return 0
 
 
