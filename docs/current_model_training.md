@@ -10,7 +10,8 @@ config/cnn_candidate_25d_regularized.json
 ```
 
 It records the model architecture, preprocessing size, training hyperparameters,
-seed, and output paths. Edit that config to run a controlled experiment.
+seed, and output paths. Edit configs under `config/` to run controlled
+experiments.
 
 ## Train
 

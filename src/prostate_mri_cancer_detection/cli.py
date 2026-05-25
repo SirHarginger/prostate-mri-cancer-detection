@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
+from prostate_mri_cancer_detection.commands.cnn import run_cnn_candidate_command
 from prostate_mri_cancer_detection.cnn import (
     prepare_cnn_tensor_cache,
     run_cnn_candidate_training,
@@ -794,7 +794,7 @@ def build_parser() -> argparse.ArgumentParser:
     cnn_candidate_parser.add_argument("--predictions", default="outputs/reports/cnn_candidate_predictions.csv", type=Path)
     cnn_candidate_parser.add_argument("--report", default="outputs/reports/cnn_candidate_report.json", type=Path)
     cnn_candidate_parser.add_argument("--model", default="outputs/models/cnn_candidate_model.pt", type=Path)
-    cnn_candidate_parser.set_defaults(func=run_cnn_candidate)
+    cnn_candidate_parser.set_defaults(func=run_cnn_candidate_command)
 
     cnn_seed_parser = subparsers.add_parser(
         "cnn-seed-summary",
