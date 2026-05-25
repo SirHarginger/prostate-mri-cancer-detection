@@ -331,6 +331,184 @@ def run_radiomics_ml_baseline(
     return report
 
 
+def run_radiomics_cv_baseline(
+    features_path: str | Path,
+    metrics_path: str | Path,
+    predictions_path: str | Path,
+    report_path: str | Path,
+    target_sensitivity: float = 0.90,
+    c_values: list[float] | None = None,
+) -> dict[str, Any]:
+    """Run rotated-fold radiomics-only logistic-regression baselines."""
+
+    try:
+        import numpy as np
+        from sklearn.impute import SimpleImputer
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import StandardScaler
+    except ImportError as error:  # pragma: no cover - depends on cluster env.
+        raise RuntimeError("scikit-learn and numpy are required for the radiomics CV baseline") from error
+
+    c_grid = c_values or [0.01, 0.1, 1.0, 10.0]
+    rows = load_csv(features_path)
+    feature_columns = numeric_feature_columns(rows)
+    model_rows = prepare_radiomics_model_rows(rows, feature_columns)
+    fold_order = sorted({row["fold"] for row in model_rows})
+    if len(fold_order) < 3:
+        raise ValueError("rotated-fold evaluation requires at least three folds")
+
+    prediction_rows: list[dict[str, str]] = []
+    fold_reports: dict[str, Any] = {}
+    coefficient_rows: list[dict[str, float]] = []
+    fixed_test_predictions: list[dict[str, Any]] = []
+
+    for index, test_fold in enumerate(fold_order):
+        validation_fold = fold_order[(index + 1) % len(fold_order)]
+        train_folds = [fold for fold in fold_order if fold not in {test_fold, validation_fold}]
+        split_rows = {
+            "train": [row for row in model_rows if row["fold"] in train_folds],
+            "validation": [row for row in model_rows if row["fold"] == validation_fold],
+            "test": [row for row in model_rows if row["fold"] == test_fold],
+        }
+        if {row["label"] for row in split_rows["train"]} != {0, 1}:
+            raise ValueError(f"training folds for {test_fold} must contain positive and negative cases")
+
+        selected = select_logistic_c(
+            split_rows=split_rows,
+            c_grid=c_grid,
+            np_module=np,
+            SimpleImputer=SimpleImputer,
+            StandardScaler=StandardScaler,
+            LogisticRegression=LogisticRegression,
+            Pipeline=Pipeline,
+        )
+        pipeline = selected["pipeline"]
+        fold_prediction_rows: list[dict[str, str]] = []
+        for split, rows_for_split in split_rows.items():
+            for row in rows_for_split:
+                probability = radiomics_probability(np, pipeline, row)
+                prediction = 1 if probability >= 0.5 else 0
+                fold_prediction_rows.append(
+                    {
+                        "baseline": "radiomics_logistic_regression_cv",
+                        "case_id": row["case_id"],
+                        "fold": row["fold"],
+                        "split": split,
+                        "label": str(row["label"]),
+                        "score": format_float(probability),
+                        "probability": format_float(probability),
+                        "prediction": str(prediction),
+                        "status": "ok",
+                        "reason": "",
+                        "rotation_test_fold": test_fold,
+                        "rotation_validation_fold": validation_fold,
+                        "rotation_train_folds": ";".join(train_folds),
+                        "selected_c": format_float(selected["c"]),
+                    }
+                )
+        prediction_rows.extend(fold_prediction_rows)
+
+        validation_rows = [row for row in fold_prediction_rows if row["split"] == "validation"]
+        test_rows = [row for row in fold_prediction_rows if row["split"] == "test"]
+        validation_threshold = fixed_sensitivity_analysis(
+            rows=validation_rows,
+            labels=[int(row["label"]) for row in validation_rows],
+            probabilities=[float(row["probability"]) for row in validation_rows],
+            target_sensitivity=target_sensitivity,
+        )
+        test_fixed = apply_threshold_from_validation(
+            rows=test_rows,
+            threshold_report=validation_threshold,
+            target_sensitivity=target_sensitivity,
+        )
+        if test_fixed["status"] == "ok":
+            fixed_test_predictions.extend(test_fixed["thresholded_rows"])
+
+        coefficients = pipeline.named_steps["model"].coef_[0]
+        for feature, coefficient in zip(feature_columns, coefficients):
+            coefficient_rows.append(
+                {
+                    "feature": feature,
+                    "coefficient": float(coefficient),
+                    "abs_coefficient": abs(float(coefficient)),
+                }
+            )
+
+        fold_reports[test_fold] = {
+            "test_fold": test_fold,
+            "validation_fold": validation_fold,
+            "train_folds": train_folds,
+            "selected_c": selected["c"],
+            "c_grid": c_grid,
+            "validation_selection": selected["validation_scores"],
+            "split_counts": {split: len(rows_for_split) for split, rows_for_split in split_rows.items()},
+            "split_label_counts": {
+                split: dict(Counter(str(row["label"]) for row in rows_for_split))
+                for split, rows_for_split in split_rows.items()
+            },
+            "metrics": {
+                split: summarize_prediction_group(
+                    [row for row in fold_prediction_rows if row["split"] == split],
+                    target_sensitivity=target_sensitivity,
+                )
+                for split in ("train", "validation", "test")
+            },
+            "validation_selected_fixed_sensitivity": {
+                "validation": validation_threshold,
+                "test": strip_thresholded_rows(test_fixed),
+            },
+        }
+
+    aggregate = aggregate_cv_predictions(
+        prediction_rows=prediction_rows,
+        fixed_test_predictions=fixed_test_predictions,
+        target_sensitivity=target_sensitivity,
+    )
+    report = {
+        "schema_version": "1.0",
+        "stage": "rotated_fold_radiomics_only_ml_baseline",
+        "features_path": str(features_path),
+        "feature_count": len(feature_columns),
+        "fold_order": fold_order,
+        "case_counts": {
+            "total": len(model_rows),
+            "folds": dict(Counter(row["fold"] for row in model_rows)),
+        },
+        "label_counts": dict(Counter(str(row["label"]) for row in model_rows)),
+        "model": {
+            "name": "LogisticRegression",
+            "class_weight": "balanced",
+            "solver": "liblinear",
+            "max_iter": 5000,
+            "random_state": 42,
+            "preprocessing": ["median imputation", "standard scaling"],
+            "hyperparameter_selection": "C selected by validation ROC-AUC within each rotated fold",
+            "c_grid": c_grid,
+        },
+        "rotation_policy": {
+            "test_fold": "each PI-CAI fold is held out as test once",
+            "validation_fold": "the next fold in sorted order is used for hyperparameter and threshold selection",
+            "train_folds": "the remaining three folds",
+        },
+        "folds": fold_reports,
+        "aggregate": aggregate,
+        "top_coefficients": aggregate_coefficients(coefficient_rows)[:25],
+        "excluded_non_feature_columns": sorted(NON_FEATURE_COLUMNS),
+        "claim_limits": [
+            "This is an internal rotated-fold radiomics-only baseline.",
+            "Validation folds select model hyperparameters and fixed-sensitivity thresholds; test folds remain held out per rotation.",
+            "No CNN or hybrid performance claim is supported by this run.",
+            "No external validation, clinical deployment, lesion localization, or biopsy-reduction claim is supported.",
+        ],
+    }
+
+    write_json(metrics_path, {"folds": fold_reports, "aggregate": aggregate})
+    write_predictions(predictions_path, prediction_rows)
+    write_json(report_path, report)
+    return report
+
+
 def evaluate_baseline(baseline_name: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Train/evaluate a dependency-free nearest-centroid baseline."""
 
@@ -563,6 +741,279 @@ def threshold_metrics(labels: list[int], predicted: list[int]) -> dict[str, Any]
     }
 
 
+def prepare_radiomics_model_rows(
+    rows: list[dict[str, str]],
+    feature_columns: list[str],
+) -> list[dict[str, Any]]:
+    """Prepare labeled radiomics rows for scikit-learn baselines."""
+
+    model_rows = []
+    for row in rows:
+        label = parse_label(row.get("label_cspca", ""))
+        if label is None:
+            continue
+        model_rows.append(
+            {
+                "case_id": row["case_id"],
+                "fold": row["fold"],
+                "label": label,
+                "features": [float(row[column]) for column in feature_columns],
+            }
+        )
+    return model_rows
+
+
+def select_logistic_c(
+    split_rows: dict[str, list[dict[str, Any]]],
+    c_grid: list[float],
+    np_module: Any,
+    SimpleImputer: Any,
+    StandardScaler: Any,
+    LogisticRegression: Any,
+    Pipeline: Any,
+) -> dict[str, Any]:
+    """Select logistic-regression C by validation ROC-AUC."""
+
+    train_rows = split_rows["train"]
+    validation_rows = split_rows["validation"]
+    x_train = np_module.asarray([row["features"] for row in train_rows], dtype=float)
+    y_train = np_module.asarray([row["label"] for row in train_rows], dtype=int)
+    validation_labels = [int(row["label"]) for row in validation_rows]
+
+    best_pipeline = None
+    best_c = None
+    best_key = (-1.0, float("-inf"))
+    validation_scores = []
+    for c_value in c_grid:
+        pipeline = Pipeline(
+            steps=[
+                ("imputer", SimpleImputer(strategy="median")),
+                ("scaler", StandardScaler()),
+                (
+                    "model",
+                    LogisticRegression(
+                        C=float(c_value),
+                        max_iter=5000,
+                        class_weight="balanced",
+                        solver="liblinear",
+                        random_state=42,
+                    ),
+                ),
+            ]
+        )
+        pipeline.fit(x_train, y_train)
+        probabilities = [radiomics_probability(np_module, pipeline, row) for row in validation_rows]
+        validation_auc = roc_auc(validation_labels, probabilities)
+        validation_scores.append(
+            {
+                "c": float(c_value),
+                "roc_auc": validation_auc,
+            }
+        )
+        candidate_key = (validation_auc if validation_auc is not None else -1.0, -float(c_value))
+        if candidate_key > best_key:
+            best_key = candidate_key
+            best_c = float(c_value)
+            best_pipeline = pipeline
+
+    if best_pipeline is None or best_c is None:
+        raise ValueError("could not select a logistic-regression C value")
+    return {
+        "c": best_c,
+        "pipeline": best_pipeline,
+        "validation_scores": validation_scores,
+    }
+
+
+def radiomics_probability(np_module: Any, pipeline: Any, row: dict[str, Any]) -> float:
+    """Predict positive-class probability for one radiomics row."""
+
+    x_row = np_module.asarray([row["features"]], dtype=float)
+    return float(pipeline.predict_proba(x_row)[0, 1])
+
+
+def apply_threshold_from_validation(
+    rows: list[dict[str, str]],
+    threshold_report: dict[str, Any],
+    target_sensitivity: float,
+) -> dict[str, Any]:
+    """Apply a validation-selected fixed-sensitivity threshold to test rows."""
+
+    if threshold_report.get("status") != "ok":
+        return {
+            "status": "undefined",
+            "target_sensitivity": target_sensitivity,
+            "reason": "validation threshold was not available",
+            "validation_threshold_status": threshold_report.get("status"),
+            "thresholded_rows": [],
+        }
+
+    threshold = float(threshold_report["threshold"])
+    labels = [int(row["label"]) for row in rows]
+    probabilities = [float(row["probability"]) for row in rows]
+    predicted = [1 if probability >= threshold else 0 for probability in probabilities]
+    false_positives = [
+        row["case_id"]
+        for row, label, prediction in zip(rows, labels, predicted)
+        if label == 0 and prediction == 1
+    ]
+    false_negatives = [
+        row["case_id"]
+        for row, label, prediction in zip(rows, labels, predicted)
+        if label == 1 and prediction == 0
+    ]
+    thresholded_rows = [
+        {
+            "case_id": row["case_id"],
+            "fold": row["fold"],
+            "label": int(row["label"]),
+            "probability": float(row["probability"]),
+            "prediction": prediction,
+            "rotation_test_fold": row.get("rotation_test_fold", ""),
+            "threshold": threshold,
+        }
+        for row, prediction in zip(rows, predicted)
+    ]
+    return {
+        "status": "ok",
+        "target_sensitivity": target_sensitivity,
+        "threshold_source": "validation",
+        "threshold": threshold,
+        "metrics": threshold_metrics(labels, predicted),
+        "false_positives": false_positives,
+        "false_negatives": false_negatives,
+        "thresholded_rows": thresholded_rows,
+    }
+
+
+def strip_thresholded_rows(payload: dict[str, Any]) -> dict[str, Any]:
+    """Remove verbose per-row threshold output from nested reports."""
+
+    return {key: value for key, value in payload.items() if key != "thresholded_rows"}
+
+
+def aggregate_cv_predictions(
+    prediction_rows: list[dict[str, str]],
+    fixed_test_predictions: list[dict[str, Any]],
+    target_sensitivity: float,
+) -> dict[str, Any]:
+    """Aggregate rotated-fold predictions across held-out test folds."""
+
+    test_rows = [row for row in prediction_rows if row["split"] == "test"]
+    test_rows_by_fold: dict[str, list[dict[str, str]]] = {}
+    for row in test_rows:
+        test_rows_by_fold.setdefault(row["rotation_test_fold"], []).append(row)
+    fold_test_metrics = {
+        fold: classification_metrics(rows)
+        for fold, rows in sorted(test_rows_by_fold.items())
+    }
+
+    aggregate = {
+        "pooled_test_default": summarize_prediction_group(
+            test_rows,
+            target_sensitivity=target_sensitivity,
+        ),
+        "fold_test_metrics": fold_test_metrics,
+        "fold_test_metric_summary": summarize_metric_distribution(fold_test_metrics),
+        "validation_selected_fixed_sensitivity": aggregate_fixed_threshold_predictions(
+            fixed_test_predictions=fixed_test_predictions,
+            target_sensitivity=target_sensitivity,
+        ),
+    }
+    aggregate["pooled_test_default"]["fixed_sensitivity_note"] = (
+        "This threshold is selected on pooled test scores and is included only "
+        "for diagnostics. Use validation_selected_fixed_sensitivity for held-out "
+        "fixed-sensitivity behavior."
+    )
+    return aggregate
+
+
+def aggregate_fixed_threshold_predictions(
+    fixed_test_predictions: list[dict[str, Any]],
+    target_sensitivity: float,
+) -> dict[str, Any]:
+    """Aggregate test predictions thresholded by validation-selected cutoffs."""
+
+    if not fixed_test_predictions:
+        return {
+            "status": "undefined",
+            "target_sensitivity": target_sensitivity,
+            "reason": "no validation-selected thresholds were available",
+        }
+
+    labels = [int(row["label"]) for row in fixed_test_predictions]
+    predicted = [int(row["prediction"]) for row in fixed_test_predictions]
+    false_positives = [
+        row["case_id"]
+        for row, label, prediction in zip(fixed_test_predictions, labels, predicted)
+        if label == 0 and prediction == 1
+    ]
+    false_negatives = [
+        row["case_id"]
+        for row, label, prediction in zip(fixed_test_predictions, labels, predicted)
+        if label == 1 and prediction == 0
+    ]
+    return {
+        "status": "ok",
+        "target_sensitivity": target_sensitivity,
+        "threshold_source": "validation fold per rotation",
+        "n": len(fixed_test_predictions),
+        "metrics": threshold_metrics(labels, predicted),
+        "false_positives": false_positives,
+        "false_negatives": false_negatives,
+    }
+
+
+def summarize_metric_distribution(fold_metrics: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Summarize metric mean/std across rotated held-out folds."""
+
+    summary = {}
+    for metric_name in ("roc_auc", "sensitivity", "specificity", "precision", "f1", "accuracy"):
+        values = [
+            metrics.get(metric_name)
+            for metrics in fold_metrics.values()
+            if metrics.get(metric_name) is not None
+        ]
+        summary[metric_name] = mean_std(values)
+    return summary
+
+
+def aggregate_coefficients(rows: list[dict[str, float]]) -> list[dict[str, Any]]:
+    """Aggregate selected-model coefficients across rotations."""
+
+    by_feature: dict[str, list[float]] = {}
+    for row in rows:
+        by_feature.setdefault(str(row["feature"]), []).append(float(row["coefficient"]))
+
+    aggregated = []
+    for feature, coefficients in by_feature.items():
+        mean_coefficient = sum(coefficients) / len(coefficients)
+        mean_abs_coefficient = sum(abs(value) for value in coefficients) / len(coefficients)
+        aggregated.append(
+            {
+                "feature": feature,
+                "mean_coefficient": mean_coefficient,
+                "mean_abs_coefficient": mean_abs_coefficient,
+                "rotations": len(coefficients),
+            }
+        )
+    return sorted(
+        aggregated,
+        key=lambda item: item["mean_abs_coefficient"],
+        reverse=True,
+    )
+
+
+def mean_std(values: list[float]) -> dict[str, Any]:
+    """Return population mean/std for a metric list."""
+
+    if not values:
+        return {"mean": None, "std": None, "n": 0}
+    mean = sum(values) / len(values)
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    return {"mean": mean, "std": math.sqrt(variance), "n": len(values)}
+
+
 def numeric_feature_columns(rows: list[dict[str, str]]) -> list[str]:
     """Return numeric columns that are safe to use as model features."""
 
@@ -684,7 +1135,7 @@ def load_csv(path: str | Path) -> list[dict[str, str]]:
 def write_predictions(path: str | Path, rows: list[dict[str, str]]) -> None:
     """Write baseline prediction rows."""
 
-    fieldnames = [
+    base_fieldnames = [
         "baseline",
         "case_id",
         "fold",
@@ -696,6 +1147,15 @@ def write_predictions(path: str | Path, rows: list[dict[str, str]]) -> None:
         "status",
         "reason",
     ]
+    extra_fieldnames = sorted(
+        {
+            key
+            for row in rows
+            for key in row
+            if key not in base_fieldnames
+        }
+    )
+    fieldnames = base_fieldnames + extra_fieldnames
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as csv_file:

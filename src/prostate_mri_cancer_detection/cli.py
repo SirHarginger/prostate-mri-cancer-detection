@@ -9,6 +9,7 @@ from prostate_mri_cancer_detection.data import build_and_write_manifest
 from prostate_mri_cancer_detection.evaluation import (
     generate_evaluation_report,
     run_feature_baselines,
+    run_radiomics_cv_baseline,
     run_radiomics_ml_baseline,
 )
 from prostate_mri_cancer_detection.explainability import generate_explainability_report
@@ -455,6 +456,49 @@ def build_parser() -> argparse.ArgumentParser:
     )
     radiomics_ml_parser.set_defaults(func=run_radiomics_ml)
 
+    radiomics_cv_parser = subparsers.add_parser(
+        "radiomics-cv-baseline",
+        help="Run a rotated-fold radiomics-only logistic-regression baseline.",
+    )
+    radiomics_cv_parser.add_argument(
+        "--features",
+        default="data/features/radiomics_gland_multisequence_full.csv",
+        type=Path,
+        help="Full multisequence whole-gland radiomics feature table.",
+    )
+    radiomics_cv_parser.add_argument(
+        "--metrics",
+        default="outputs/reports/radiomics_cv_metrics.json",
+        type=Path,
+        help="Rotated-fold metrics JSON output path.",
+    )
+    radiomics_cv_parser.add_argument(
+        "--predictions",
+        default="outputs/reports/radiomics_cv_predictions.csv",
+        type=Path,
+        help="Rotated-fold prediction CSV output path.",
+    )
+    radiomics_cv_parser.add_argument(
+        "--report",
+        default="outputs/reports/radiomics_cv_report.json",
+        type=Path,
+        help="Rotated-fold report JSON output path.",
+    )
+    radiomics_cv_parser.add_argument(
+        "--target-sensitivity",
+        default=0.90,
+        type=float,
+        help="Target sensitivity for validation-selected threshold analysis.",
+    )
+    radiomics_cv_parser.add_argument(
+        "--c-value",
+        action="append",
+        default=[],
+        type=float,
+        help="Logistic-regression C value to evaluate. Can be provided multiple times.",
+    )
+    radiomics_cv_parser.set_defaults(func=run_radiomics_cv)
+
     evaluation_parser = subparsers.add_parser(
         "evaluation-report",
         help="Generate Stage 6 metrics and error-analysis reports from predictions.",
@@ -740,6 +784,38 @@ def run_radiomics_ml(args: argparse.Namespace) -> int:
     for split, payload in report["metrics"].items():
         metrics = payload["metrics"]
         print(f"{split}: n={metrics['n']} auc={metrics['roc_auc']} sens={metrics['sensitivity']} spec={metrics['specificity']}")
+    return 0
+
+
+def run_radiomics_cv(args: argparse.Namespace) -> int:
+    """Run rotated-fold radiomics-only ML baseline."""
+
+    report = run_radiomics_cv_baseline(
+        features_path=args.features,
+        metrics_path=args.metrics,
+        predictions_path=args.predictions,
+        report_path=args.report,
+        target_sensitivity=args.target_sensitivity,
+        c_values=args.c_value or None,
+    )
+
+    print(f"Wrote radiomics CV metrics: {args.metrics}")
+    print(f"Wrote radiomics CV predictions: {args.predictions}")
+    print(f"Wrote radiomics CV report: {args.report}")
+    print(f"Cases: {report['case_counts']}")
+    print(f"Labels: {report['label_counts']}")
+    print(f"Fold order: {report['fold_order']}")
+    default_metrics = report["aggregate"]["pooled_test_default"]["metrics"]
+    fixed = report["aggregate"]["validation_selected_fixed_sensitivity"]
+    print(
+        "Pooled held-out default: "
+        f"n={default_metrics['n']} auc={default_metrics['roc_auc']} "
+        f"sens={default_metrics['sensitivity']} spec={default_metrics['specificity']}"
+    )
+    print(
+        "Validation-selected fixed sensitivity: "
+        f"status={fixed['status']} metrics={fixed.get('metrics')}"
+    )
     return 0
 
 
