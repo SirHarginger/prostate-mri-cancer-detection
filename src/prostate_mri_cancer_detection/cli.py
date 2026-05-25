@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 
 from prostate_mri_cancer_detection.data import build_and_write_manifest
+from prostate_mri_cancer_detection.evaluation import run_feature_baselines
 from prostate_mri_cancer_detection.features import extract_radiomics_features
 from prostate_mri_cancer_detection.modeling import extract_embedding_table
 from prostate_mri_cancer_detection.preprocessing import validate_preprocessing_inputs
@@ -232,6 +233,48 @@ def build_parser() -> argparse.ArgumentParser:
         help="Embedding extraction validation report path.",
     )
     embedding_parser.set_defaults(func=run_embedding_extract)
+
+    baseline_parser = subparsers.add_parser(
+        "baseline-evaluate",
+        help="Run Stage 5 aligned prototype radiomics/embedding/hybrid baselines.",
+    )
+    baseline_parser.add_argument(
+        "--manifest",
+        default="data/interim/picai_manifest.csv",
+        type=Path,
+        help="Stage 1 manifest CSV path.",
+    )
+    baseline_parser.add_argument(
+        "--radiomics",
+        default="data/features/radiomics_t2w_gland_sample.csv",
+        type=Path,
+        help="Radiomics feature table path.",
+    )
+    baseline_parser.add_argument(
+        "--embeddings",
+        default="data/features/embeddings_t2w_prototype_sample.csv",
+        type=Path,
+        help="Embedding table path.",
+    )
+    baseline_parser.add_argument(
+        "--metrics",
+        default="outputs/reports/prototype_baseline_metrics.json",
+        type=Path,
+        help="Baseline metrics JSON output path.",
+    )
+    baseline_parser.add_argument(
+        "--predictions",
+        default="outputs/reports/prototype_baseline_predictions.csv",
+        type=Path,
+        help="Baseline predictions CSV output path.",
+    )
+    baseline_parser.add_argument(
+        "--report",
+        default="outputs/reports/prototype_baseline_report.json",
+        type=Path,
+        help="Baseline validation report JSON output path.",
+    )
+    baseline_parser.set_defaults(func=run_baseline_evaluate)
     return parser
 
 
@@ -332,6 +375,29 @@ def run_embedding_extract(args: argparse.Namespace) -> int:
     print(f"Embeddings by split: {summary['embeddings_by_split']}")
     print(f"Augmentation by split: {summary['augmentation_by_split']}")
     print(f"Validation/test augmented rows: {summary['validation_or_test_augmented_rows']}")
+    return 0
+
+
+def run_baseline_evaluate(args: argparse.Namespace) -> int:
+    """Run Stage 5 prototype feature baselines."""
+
+    report = run_feature_baselines(
+        manifest_path=args.manifest,
+        radiomics_path=args.radiomics,
+        embeddings_path=args.embeddings,
+        metrics_path=args.metrics,
+        predictions_path=args.predictions,
+        report_path=args.report,
+    )
+
+    print(f"Wrote baseline metrics: {args.metrics}")
+    print(f"Wrote baseline predictions: {args.predictions}")
+    print(f"Wrote baseline report: {args.report}")
+    print(f"Aligned cases: {report['case_counts']['aligned']}")
+    print(f"Split counts: {report['split_counts']}")
+    print(f"Label counts: {report['label_counts']}")
+    for name, metrics in report["metrics"].items():
+        print(f"{name}: {metrics.get('status')}")
     return 0
 
 
