@@ -189,6 +189,148 @@ def generate_evaluation_report(
     return report
 
 
+def run_radiomics_ml_baseline(
+    features_path: str | Path,
+    metrics_path: str | Path,
+    predictions_path: str | Path,
+    report_path: str | Path,
+    target_sensitivity: float = 0.90,
+) -> dict[str, Any]:
+    """Run a full-table radiomics-only logistic-regression baseline."""
+
+    try:
+        import numpy as np
+        from sklearn.impute import SimpleImputer
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.metrics import roc_auc_score
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import StandardScaler
+    except ImportError as error:  # pragma: no cover - depends on cluster env.
+        raise RuntimeError("scikit-learn and numpy are required for the radiomics ML baseline") from error
+
+    rows = load_csv(features_path)
+    feature_columns = numeric_feature_columns(rows)
+    model_rows = [
+        {
+            "case_id": row["case_id"],
+            "fold": row["fold"],
+            "split": SPLIT_BY_FOLD.get(row["fold"], "unknown"),
+            "label": parse_label(row.get("label_cspca", "")),
+            "features": [float(row[column]) for column in feature_columns],
+        }
+        for row in rows
+        if parse_label(row.get("label_cspca", "")) is not None
+    ]
+    train_rows = [row for row in model_rows if row["split"] == "train"]
+    if {row["label"] for row in train_rows} != {0, 1}:
+        raise ValueError("training split must contain positive and negative cases")
+
+    x_train = np.asarray([row["features"] for row in train_rows], dtype=float)
+    y_train = np.asarray([row["label"] for row in train_rows], dtype=int)
+    pipeline = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+            (
+                "model",
+                LogisticRegression(
+                    max_iter=5000,
+                    class_weight="balanced",
+                    solver="liblinear",
+                    random_state=42,
+                ),
+            ),
+        ]
+    )
+    pipeline.fit(x_train, y_train)
+
+    prediction_rows: list[dict[str, str]] = []
+    for row in model_rows:
+        x_row = np.asarray([row["features"]], dtype=float)
+        probability = float(pipeline.predict_proba(x_row)[0, 1])
+        prediction = 1 if probability >= 0.5 else 0
+        prediction_rows.append(
+            {
+                "baseline": "radiomics_logistic_regression",
+                "case_id": row["case_id"],
+                "fold": row["fold"],
+                "split": row["split"],
+                "label": str(row["label"]),
+                "score": format_float(probability),
+                "probability": format_float(probability),
+                "prediction": str(prediction),
+                "status": "ok",
+                "reason": "",
+            }
+        )
+
+    split_metrics = {}
+    for split in ("train", "validation", "test"):
+        split_predictions = [row for row in prediction_rows if row["split"] == split]
+        split_metrics[split] = summarize_prediction_group(
+            split_predictions,
+            target_sensitivity=target_sensitivity,
+        )
+    coefficients = pipeline.named_steps["model"].coef_[0]
+    scaled_feature_importance = sorted(
+        [
+            {
+                "feature": feature,
+                "coefficient": float(coefficient),
+                "abs_coefficient": abs(float(coefficient)),
+            }
+            for feature, coefficient in zip(feature_columns, coefficients)
+        ],
+        key=lambda item: item["abs_coefficient"],
+        reverse=True,
+    )
+
+    report = {
+        "schema_version": "1.0",
+        "stage": "full_radiomics_only_ml_baseline",
+        "features_path": str(features_path),
+        "feature_count": len(feature_columns),
+        "case_counts": {
+            "total": len(model_rows),
+            "train": sum(1 for row in model_rows if row["split"] == "train"),
+            "validation": sum(1 for row in model_rows if row["split"] == "validation"),
+            "test": sum(1 for row in model_rows if row["split"] == "test"),
+        },
+        "label_counts": dict(Counter(str(row["label"]) for row in model_rows)),
+        "split_label_counts": {
+            split: dict(Counter(str(row["label"]) for row in model_rows if row["split"] == split))
+            for split in ("train", "validation", "test")
+        },
+        "model": {
+            "name": "LogisticRegression",
+            "class_weight": "balanced",
+            "solver": "liblinear",
+            "max_iter": 5000,
+            "random_state": 42,
+            "preprocessing": ["median imputation", "standard scaling"],
+        },
+        "metrics": split_metrics,
+        "top_coefficients": scaled_feature_importance[:25],
+        "excluded_non_feature_columns": sorted(NON_FEATURE_COLUMNS),
+        "claim_limits": [
+            "This is an internal full-table radiomics-only baseline.",
+            "No CNN or hybrid performance claim is supported by this run.",
+            "No external validation, clinical deployment, lesion localization, or biopsy-reduction claim is supported.",
+        ],
+    }
+    write_json(metrics_path, split_metrics)
+    write_predictions(predictions_path, prediction_rows)
+    write_json(report_path, report)
+
+    try:
+        report["sklearn_train_auc"] = float(
+            roc_auc_score(y_train, pipeline.predict_proba(x_train)[:, 1])
+        )
+    except ValueError:
+        report["sklearn_train_auc"] = None
+    return report
+
+
 def evaluate_baseline(baseline_name: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Train/evaluate a dependency-free nearest-centroid baseline."""
 

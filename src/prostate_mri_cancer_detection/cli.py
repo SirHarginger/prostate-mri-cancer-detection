@@ -6,7 +6,11 @@ import argparse
 from pathlib import Path
 
 from prostate_mri_cancer_detection.data import build_and_write_manifest
-from prostate_mri_cancer_detection.evaluation import generate_evaluation_report, run_feature_baselines
+from prostate_mri_cancer_detection.evaluation import (
+    generate_evaluation_report,
+    run_feature_baselines,
+    run_radiomics_ml_baseline,
+)
 from prostate_mri_cancer_detection.explainability import generate_explainability_report
 from prostate_mri_cancer_detection.features import (
     extract_full_gland_multisequence_radiomics,
@@ -415,6 +419,42 @@ def build_parser() -> argparse.ArgumentParser:
     )
     baseline_parser.set_defaults(func=run_baseline_evaluate)
 
+    radiomics_ml_parser = subparsers.add_parser(
+        "radiomics-ml-baseline",
+        help="Run a full-table radiomics-only logistic-regression baseline.",
+    )
+    radiomics_ml_parser.add_argument(
+        "--features",
+        default="data/features/radiomics_gland_multisequence_full.csv",
+        type=Path,
+        help="Full multisequence whole-gland radiomics feature table.",
+    )
+    radiomics_ml_parser.add_argument(
+        "--metrics",
+        default="outputs/reports/radiomics_ml_metrics.json",
+        type=Path,
+        help="Metrics JSON output path.",
+    )
+    radiomics_ml_parser.add_argument(
+        "--predictions",
+        default="outputs/reports/radiomics_ml_predictions.csv",
+        type=Path,
+        help="Prediction CSV output path.",
+    )
+    radiomics_ml_parser.add_argument(
+        "--report",
+        default="outputs/reports/radiomics_ml_report.json",
+        type=Path,
+        help="Full baseline report JSON output path.",
+    )
+    radiomics_ml_parser.add_argument(
+        "--target-sensitivity",
+        default=0.90,
+        type=float,
+        help="Target sensitivity for fixed-sensitivity analysis.",
+    )
+    radiomics_ml_parser.set_defaults(func=run_radiomics_ml)
+
     evaluation_parser = subparsers.add_parser(
         "evaluation-report",
         help="Generate Stage 6 metrics and error-analysis reports from predictions.",
@@ -678,6 +718,28 @@ def run_baseline_evaluate(args: argparse.Namespace) -> int:
     print(f"Label counts: {report['label_counts']}")
     for name, metrics in report["metrics"].items():
         print(f"{name}: {metrics.get('status')}")
+    return 0
+
+
+def run_radiomics_ml(args: argparse.Namespace) -> int:
+    """Run full-table radiomics-only ML baseline."""
+
+    report = run_radiomics_ml_baseline(
+        features_path=args.features,
+        metrics_path=args.metrics,
+        predictions_path=args.predictions,
+        report_path=args.report,
+        target_sensitivity=args.target_sensitivity,
+    )
+
+    print(f"Wrote radiomics ML metrics: {args.metrics}")
+    print(f"Wrote radiomics ML predictions: {args.predictions}")
+    print(f"Wrote radiomics ML report: {args.report}")
+    print(f"Cases: {report['case_counts']}")
+    print(f"Labels: {report['label_counts']}")
+    for split, payload in report["metrics"].items():
+        metrics = payload["metrics"]
+        print(f"{split}: n={metrics['n']} auc={metrics['roc_auc']} sens={metrics['sensitivity']} spec={metrics['specificity']}")
     return 0
 
 
