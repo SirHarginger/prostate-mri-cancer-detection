@@ -1,0 +1,26 @@
+{
+  "dataset_name": "prostate_external_autosegmentation",
+  "external_source": {
+    "name": "PROSTATEx",
+    "official_url": "https://www.cancerimagingarchive.net/collection/prostatex/",
+    "download_dir": "nnunet_autosegmentation/data/raw/prostatex"
+  },
+  "nnunet": {
+    "raw": "nnunet_autosegmentation/data/nnunet_raw",
+    "preprocessed": "nnunet_autosegmentation/data/nnunet_preprocessed",
+    "results": "nnunet_autosegmentation/data/nnunet_results",
+    "input_dir": "nnunet_autosegmentation/data/nnunet_raw/Dataset901_ProstateExternal/imagesTs",
+    "output_dir": "nnunet_autosegmentation/data/external_predictions/prostatex",
+    "dataset_id": 901,
+    "dataset_label": "ProstateExternal",
+    "trainer": "nnUNetTrainer",
+    "configuration": "3d_fullres",
+    "folds": "all"
+  },
+  "feature_extraction": {
+    "image_dir": "nnunet_autosegmentation/data/nnunet_raw/Dataset901_ProstateExternal/imagesTs",
+    "mask_dir": "nnunet_autosegmentation/data/external_predictions/prostatex",
+    "output_csv": "nnunet_autosegmentation/outputs/features/prostatex_autoseg_features.csv",
+    "report_json": "nnunet_autosegmentation/outputs/reports/prostatex_autoseg_feature_report.json"
+  }
+}

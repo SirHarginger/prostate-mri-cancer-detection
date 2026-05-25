@@ -1,0 +1,6 @@
+# Copy this file to nnunet_env on the cluster and edit paths if needed.
+# Do not commit local absolute data paths unless they are documented cluster defaults.
+
+export nnUNet_raw="nnunet_autosegmentation/data/nnunet_raw"
+export nnUNet_preprocessed="nnunet_autosegmentation/data/nnunet_preprocessed"
+export nnUNet_results="nnunet_autosegmentation/data/nnunet_results"

@@ -24,6 +24,10 @@ data/features/*
 outputs/figures/*
 outputs/models/*
 outputs/reports/*
+
+# Isolated nnU-Net autosegmentation workspace data and generated outputs
+nnunet_autosegmentation/data/*
+nnunet_autosegmentation/outputs/*
 !outputs/.gitkeep
 !outputs/figures/.gitkeep
 !outputs/models/.gitkeep
