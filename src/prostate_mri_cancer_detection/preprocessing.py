@@ -90,6 +90,247 @@ def validate_preprocessing_inputs(
     return report
 
 
+def validate_resampling_plan(
+    manifest_path: str | Path,
+    raw_root: str | Path,
+    report_path: str | Path | None = None,
+    sample_size: int = 5,
+    case_ids: Iterable[str] | None = None,
+) -> dict[str, Any]:
+    """Validate SimpleITK resampling of ADC/HBV to each case's T2W grid."""
+
+    try:
+        import SimpleITK as sitk
+    except ImportError as error:  # pragma: no cover - exercised on systems without SimpleITK.
+        raise RuntimeError("SimpleITK is required for resampling validation") from error
+
+    manifest_path = Path(manifest_path)
+    raw_root = Path(raw_root)
+    rows = select_manifest_rows(
+        load_manifest_rows(manifest_path),
+        sample_size=sample_size,
+        case_ids=case_ids,
+    )
+    case_reports = [
+        validate_case_resampling_plan(row=row, raw_root=raw_root, sitk=sitk)
+        for row in rows
+    ]
+    report = {
+        "schema_version": "1.0",
+        "stage": "simpleitk_resampling_validation",
+        "manifest_path": str(manifest_path),
+        "raw_root": str(raw_root),
+        "sample_size_requested": sample_size,
+        "selected_case_ids": [row.get("case_id", "") for row in rows],
+        "resampling_policy": {
+            "reference": "T2W image grid",
+            "moving_images": ["ADC", "HBV"],
+            "image_interpolator": "linear",
+            "mask_interpolator": "nearest_neighbor",
+            "output_pixel_type": "preserve input image pixel type",
+            "write_processed_images": False,
+        },
+        "summary": summarize_resampling_cases(case_reports),
+        "cases": case_reports,
+    }
+    if report_path is not None:
+        write_preprocessing_report(report, report_path)
+    return report
+
+
+def validate_case_resampling_plan(row: dict[str, str], raw_root: Path, sitk: Any) -> dict[str, Any]:
+    """Validate one case's ADC/HBV resampling against its T2W reference."""
+
+    case_id = row.get("case_id", "")
+    t2w_path = resolve_manifest_path(row.get("path_t2w", ""), raw_root)
+    case_report: dict[str, Any] = {
+        "case_id": case_id,
+        "fold": row.get("fold", ""),
+        "reference_path": str(t2w_path),
+        "modalities": {},
+        "masks": {},
+        "issues": [],
+    }
+
+    try:
+        reference = sitk.ReadImage(str(t2w_path))
+    except Exception as error:  # noqa: BLE001 - per-case errors belong in report.
+        case_report["issues"].append(f"unreadable_t2w:{type(error).__name__}: {error}")
+        return case_report
+
+    reference_signature = simpleitk_signature(reference)
+    case_report["reference_signature"] = reference_signature
+    for modality, column in (("adc", "path_adc"), ("hbv", "path_hbv")):
+        moving_path = resolve_manifest_path(row.get(column, ""), raw_root)
+        case_report["modalities"][modality] = validate_resampled_image(
+            moving_path=moving_path,
+            reference=reference,
+            reference_signature=reference_signature,
+            sitk=sitk,
+        )
+        if not case_report["modalities"][modality]["resampled_matches_reference"]:
+            case_report["issues"].append(f"{modality}_resampling_validation_failed")
+
+    for mask_name, column in MASK_PATH_COLUMNS.items():
+        case_report["masks"][mask_name] = validate_mask_candidates(
+            mask_paths=split_pipe_value(row.get(column, "")),
+            raw_root=raw_root,
+            reference=reference,
+            reference_signature=reference_signature,
+            sitk=sitk,
+        )
+        if not case_report["masks"][mask_name]["has_reference_grid_candidate"]:
+            case_report["issues"].append(f"missing_reference_grid_{mask_name}_mask")
+    return case_report
+
+
+def validate_resampled_image(
+    moving_path: Path,
+    reference: Any,
+    reference_signature: dict[str, Any],
+    sitk: Any,
+) -> dict[str, Any]:
+    """Read and resample a moving image in memory, then compare with reference."""
+
+    report: dict[str, Any] = {
+        "path": str(moving_path),
+        "readable": False,
+        "native_signature": {},
+        "resampled_signature": {},
+        "resampled_matches_reference": False,
+        "error": "",
+    }
+    try:
+        moving = sitk.ReadImage(str(moving_path))
+        report["readable"] = True
+        report["native_signature"] = simpleitk_signature(moving)
+        resampled = resample_to_reference(moving, reference, sitk.sitkLinear, sitk)
+        report["resampled_signature"] = simpleitk_signature(resampled)
+        report["resampled_matches_reference"] = signatures_match(
+            report["resampled_signature"],
+            reference_signature,
+        )
+    except Exception as error:  # noqa: BLE001 - record per-image failure.
+        report["error"] = f"{type(error).__name__}: {error}"
+    return report
+
+
+def validate_mask_candidates(
+    mask_paths: list[str],
+    raw_root: Path,
+    reference: Any,
+    reference_signature: dict[str, Any],
+    sitk: Any,
+) -> dict[str, Any]:
+    """Validate mask candidates and reference-grid availability."""
+
+    candidates = []
+    for mask_value in mask_paths:
+        mask_path = resolve_manifest_path(mask_value, raw_root)
+        candidate: dict[str, Any] = {
+            "path": str(mask_path),
+            "readable": False,
+            "native_signature": {},
+            "matches_reference_grid": False,
+            "non_empty": None,
+            "error": "",
+        }
+        try:
+            mask = sitk.ReadImage(str(mask_path))
+            candidate["readable"] = True
+            candidate["native_signature"] = simpleitk_signature(mask)
+            candidate["matches_reference_grid"] = signatures_match(
+                candidate["native_signature"],
+                reference_signature,
+            )
+            candidate["non_empty"] = image_has_positive_voxels(mask, sitk)
+        except Exception as error:  # noqa: BLE001 - record per-mask failure.
+            candidate["error"] = f"{type(error).__name__}: {error}"
+        candidates.append(candidate)
+
+    return {
+        "candidate_count": len(candidates),
+        "readable_count": sum(1 for candidate in candidates if candidate["readable"]),
+        "reference_grid_candidate_count": sum(
+            1 for candidate in candidates if candidate["matches_reference_grid"]
+        ),
+        "non_empty_reference_grid_candidate_count": sum(
+            1
+            for candidate in candidates
+            if candidate["matches_reference_grid"] and candidate["non_empty"]
+        ),
+        "has_reference_grid_candidate": any(
+            candidate["matches_reference_grid"] for candidate in candidates
+        ),
+        "candidates": candidates,
+    }
+
+
+def resample_to_reference(moving: Any, reference: Any, interpolator: int, sitk: Any) -> Any:
+    """Resample a SimpleITK image to a reference image grid in memory."""
+
+    return sitk.Resample(
+        moving,
+        reference,
+        sitk.Transform(),
+        interpolator,
+        0,
+        moving.GetPixelID(),
+    )
+
+
+def simpleitk_signature(image: Any) -> dict[str, Any]:
+    """Return grid-defining SimpleITK metadata."""
+
+    return {
+        "size": list(image.GetSize()),
+        "spacing": [float(value) for value in image.GetSpacing()],
+        "origin": [float(value) for value in image.GetOrigin()],
+        "direction": [float(value) for value in image.GetDirection()],
+        "pixel_id": image.GetPixelIDTypeAsString(),
+    }
+
+
+def signatures_match(left: dict[str, Any], right: dict[str, Any], tolerance: float = 1e-4) -> bool:
+    """Compare image grid signatures while ignoring pixel type."""
+
+    return (
+        left.get("size") == right.get("size")
+        and floats_close(left.get("spacing", []), right.get("spacing", []), tolerance)
+        and floats_close(left.get("origin", []), right.get("origin", []), tolerance)
+        and floats_close(left.get("direction", []), right.get("direction", []), tolerance)
+    )
+
+
+def image_has_positive_voxels(image: Any, sitk: Any) -> bool:
+    """Return whether a mask has positive voxels using SimpleITK statistics."""
+
+    statistics = sitk.StatisticsImageFilter()
+    statistics.Execute(image)
+    return statistics.GetMaximum() > 0
+
+
+def summarize_resampling_cases(case_reports: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize resampling validation reports."""
+
+    return {
+        "cases_checked": len(case_reports),
+        "cases_with_issues": sum(1 for report in case_reports if report["issues"]),
+        "adc_resampled_matches_reference": sum(
+            1 for report in case_reports if report.get("modalities", {}).get("adc", {}).get("resampled_matches_reference")
+        ),
+        "hbv_resampled_matches_reference": sum(
+            1 for report in case_reports if report.get("modalities", {}).get("hbv", {}).get("resampled_matches_reference")
+        ),
+        "gland_cases_with_reference_grid_mask": sum(
+            1 for report in case_reports if report.get("masks", {}).get("gland", {}).get("has_reference_grid_candidate")
+        ),
+        "lesion_cases_with_reference_grid_mask": sum(
+            1 for report in case_reports if report.get("masks", {}).get("lesion", {}).get("has_reference_grid_candidate")
+        ),
+    }
+
+
 def load_manifest_rows(manifest_path: str | Path) -> list[dict[str, str]]:
     """Load a Stage 1 CSV manifest."""
 

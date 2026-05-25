@@ -10,7 +10,7 @@ from prostate_mri_cancer_detection.evaluation import generate_evaluation_report,
 from prostate_mri_cancer_detection.explainability import generate_explainability_report
 from prostate_mri_cancer_detection.features import extract_radiomics_features
 from prostate_mri_cancer_detection.modeling import extract_embedding_table
-from prostate_mri_cancer_detection.preprocessing import validate_preprocessing_inputs
+from prostate_mri_cancer_detection.preprocessing import validate_preprocessing_inputs, validate_resampling_plan
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -87,6 +87,42 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fold to sample from. Can be provided multiple times.",
     )
     preprocessing_parser.set_defaults(func=run_preprocessing_validate)
+
+    resampling_parser = subparsers.add_parser(
+        "resampling-validate",
+        help="Validate SimpleITK ADC/HBV resampling to T2W grid without writing processed images.",
+    )
+    resampling_parser.add_argument(
+        "--manifest",
+        default="data/interim/picai_manifest.csv",
+        type=Path,
+        help="Stage 1 manifest CSV path.",
+    )
+    resampling_parser.add_argument(
+        "--raw-root",
+        default="data/raw/picai",
+        type=Path,
+        help="Path to the local PI-CAI raw root.",
+    )
+    resampling_parser.add_argument(
+        "--sample-size",
+        default=5,
+        type=int,
+        help="Number of sorted manifest cases to validate when --case-id is not used.",
+    )
+    resampling_parser.add_argument(
+        "--case-id",
+        action="append",
+        default=[],
+        help="Specific case ID to validate. Can be provided multiple times.",
+    )
+    resampling_parser.add_argument(
+        "--report",
+        default="outputs/reports/resampling_validation_sample.json",
+        type=Path,
+        help="JSON resampling validation report output path.",
+    )
+    resampling_parser.set_defaults(func=run_resampling_validate)
 
     radiomics_parser = subparsers.add_parser(
         "radiomics-extract",
@@ -393,6 +429,28 @@ def run_preprocessing_validate(args: argparse.Namespace) -> int:
     print(f"T2W-compatible mask cases: {summary['mask_t2w_compatible_cases']}")
     print(f"Blocking issue counts: {summary['issue_counts']}")
     print(f"Resampling required counts: {summary['resampling_required_counts']}")
+    return 0
+
+
+def run_resampling_validate(args: argparse.Namespace) -> int:
+    """Run SimpleITK resampling validation."""
+
+    report = validate_resampling_plan(
+        manifest_path=args.manifest,
+        raw_root=args.raw_root,
+        report_path=args.report,
+        sample_size=args.sample_size,
+        case_ids=args.case_id,
+    )
+    summary = report["summary"]
+
+    print(f"Wrote resampling validation report: {args.report}")
+    print(f"Cases checked: {summary['cases_checked']}")
+    print(f"Cases with issues: {summary['cases_with_issues']}")
+    print(f"ADC resampled matches reference: {summary['adc_resampled_matches_reference']}")
+    print(f"HBV resampled matches reference: {summary['hbv_resampled_matches_reference']}")
+    print(f"Gland reference-grid masks: {summary['gland_cases_with_reference_grid_mask']}")
+    print(f"Lesion reference-grid masks: {summary['lesion_cases_with_reference_grid_mask']}")
     return 0
 
 
