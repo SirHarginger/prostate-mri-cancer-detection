@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Prepare external prostate MRI DICOM series for nnU-Net inference."""
+"""Prepare external PROSTATE-MRI DICOM series for nnU-Net inference."""
 
 from __future__ import annotations
 
@@ -10,12 +10,10 @@ from pathlib import Path
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Convert selected PROSTATE-MRI DICOM series to nnU-Net imagesTs NIfTI files."
-    )
+    parser = argparse.ArgumentParser(description="Convert PROSTATE-MRI DICOM series to nnU-Net imagesTs.")
     parser.add_argument(
         "--config",
-        default="nnunet_autosegmentation/config/prostate_autoseg_config.json",
+        default="nnunet_autosegmentation/config/picai_gland_lesion_nnunet_config.json",
         help="Autosegmentation config JSON.",
     )
     parser.add_argument(
@@ -25,8 +23,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--series-description",
-        default="T2 TSE ax hi",
-        help="DICOM Series Description to convert.",
+        default="",
+        help="Override T2W DICOM Series Description. Defaults to config external_source.series.t2w.",
+    )
+    parser.add_argument("--adc-series-description", default="", help="Optional ADC Series Description.")
+    parser.add_argument(
+        "--hbv-series-description",
+        default="",
+        help="Override HBV/DWI Series Description. Defaults to config external_source.series.hbv.",
     )
     parser.add_argument(
         "--limit",
@@ -79,12 +83,44 @@ def dicom_series_files(sitk, dicom_dir: Path) -> list[str]:
 
 def write_dataset_json(dataset_root: Path) -> None:
     payload = {
-        "channel_names": {"0": "T2"},
-        "labels": {"background": 0, "prostate": 1},
+        "channel_names": {"0": "T2W", "1": "ADC", "2": "HBV"},
+        "labels": {"background": 0, "prostate_gland": 1, "cspca_lesion": 2},
         "numTraining": 0,
         "file_ending": ".nii.gz",
     }
     (dataset_root / "dataset.json").write_text(json.dumps(payload, indent=2) + "\n")
+
+
+def index_rows_by_subject_and_series(rows: list[dict[str, str]]) -> dict[str, dict[str, dict[str, str]]]:
+    index: dict[str, dict[str, dict[str, str]]] = {}
+    for row in rows:
+        subject = row.get("Subject ID", "")
+        series = row.get("Series Description", "")
+        if not subject or not series:
+            continue
+        index.setdefault(subject, {})
+        index[subject].setdefault(series, row)
+    return index
+
+
+def read_series_image(sitk, metadata_root: Path, row: dict[str, str]):
+    dicom_dir = metadata_root / row["File Location"].lstrip("./")
+    files = dicom_series_files(sitk, dicom_dir)
+    if not files:
+        raise FileNotFoundError(f"No DICOM files found in {dicom_dir}")
+    reader = sitk.ImageSeriesReader()
+    reader.SetFileNames(files)
+    return reader.Execute(), str(dicom_dir), len(files)
+
+
+def resample_to_reference(sitk, moving, reference, interpolator):
+    return sitk.Resample(moving, reference, sitk.Transform(), interpolator, 0, moving.GetPixelID())
+
+
+def zero_like_reference(sitk, reference):
+    image = sitk.Image(reference.GetSize(), reference.GetPixelID())
+    image.CopyInformation(reference)
+    return image
 
 
 def main() -> int:
@@ -105,51 +141,73 @@ def main() -> int:
 
     metadata_path, metadata_root = find_metadata(download_dir)
     rows = list(csv.DictReader(metadata_path.open(newline="", encoding="utf-8", errors="replace")))
+    series_config = config.get("external_source", {}).get("series", {})
+    t2w_series = args.series_description or series_config.get("t2w") or "T2 TSE ax hi"
+    adc_series = args.adc_series_description or series_config.get("adc", "")
+    hbv_series = args.hbv_series_description or series_config.get("hbv") or "SShDWI FAST"
 
+    row_index = index_rows_by_subject_and_series(rows)
     converted = []
     failures = []
-    seen_subjects: set[str] = set()
+    subject_ids = sorted(subject for subject, series_rows in row_index.items() if t2w_series in series_rows)
+    if args.limit:
+        subject_ids = subject_ids[: args.limit]
 
-    for row in rows:
-        if row.get("Series Description") != args.series_description:
-            continue
-
-        subject_id = row["Subject ID"]
-        if subject_id in seen_subjects:
-            continue
+    for subject_id in subject_ids:
         if args.limit and len(converted) >= args.limit:
             break
 
-        seen_subjects.add(subject_id)
-        dicom_dir = metadata_root / row["File Location"].lstrip("./")
-        output_path = input_dir / f"{subject_id}_0000.nii.gz"
-
         try:
-            files = dicom_series_files(sitk, dicom_dir)
-            if not files:
-                raise FileNotFoundError(f"No DICOM files found in {dicom_dir}")
+            subject_rows = row_index[subject_id]
+            t2w, t2w_dir, t2w_file_count = read_series_image(sitk, metadata_root, subject_rows[t2w_series])
+            sitk.WriteImage(t2w, str(input_dir / f"{subject_id}_0000.nii.gz"))
 
-            reader = sitk.ImageSeriesReader()
-            reader.SetFileNames(files)
-            image = reader.Execute()
-            sitk.WriteImage(image, str(output_path))
+            adc_source = "zero_filled_missing_adc"
+            adc_dir = ""
+            adc_file_count = 0
+            if adc_series and adc_series in subject_rows:
+                adc, adc_dir, adc_file_count = read_series_image(sitk, metadata_root, subject_rows[adc_series])
+                adc = resample_to_reference(sitk, adc, t2w, sitk.sitkLinear)
+                adc_source = adc_series
+            else:
+                adc = zero_like_reference(sitk, t2w)
+            sitk.WriteImage(adc, str(input_dir / f"{subject_id}_0001.nii.gz"))
+
+            if hbv_series not in subject_rows:
+                raise FileNotFoundError(f"Missing HBV/DWI series '{hbv_series}' for {subject_id}")
+            hbv, hbv_dir, hbv_file_count = read_series_image(sitk, metadata_root, subject_rows[hbv_series])
+            hbv = resample_to_reference(sitk, hbv, t2w, sitk.sitkLinear)
+            sitk.WriteImage(hbv, str(input_dir / f"{subject_id}_0002.nii.gz"))
 
             converted.append(
                 {
                     "case_id": subject_id,
-                    "series_description": row["Series Description"],
-                    "number_of_images_metadata": row.get("Number of Images"),
-                    "dicom_files_read": len(files),
-                    "dicom_dir": str(dicom_dir),
-                    "output_path": str(output_path),
+                    "channels": {
+                        "0000": {
+                            "modality": "t2w",
+                            "series_description": t2w_series,
+                            "dicom_dir": t2w_dir,
+                            "dicom_files_read": t2w_file_count,
+                        },
+                        "0001": {
+                            "modality": "adc",
+                            "series_description": adc_source,
+                            "dicom_dir": adc_dir,
+                            "dicom_files_read": adc_file_count,
+                        },
+                        "0002": {
+                            "modality": "hbv",
+                            "series_description": hbv_series,
+                            "dicom_dir": hbv_dir,
+                            "dicom_files_read": hbv_file_count,
+                        },
+                    },
                 }
             )
         except Exception as exc:  # noqa: BLE001
             failures.append(
                 {
                     "case_id": subject_id,
-                    "series_description": row.get("Series Description"),
-                    "dicom_dir": str(dicom_dir),
                     "error": str(exc),
                 }
             )
@@ -157,12 +215,21 @@ def main() -> int:
     report = {
         "config": str(config_path),
         "metadata": str(metadata_path),
-        "series_description": args.series_description,
+        "series_descriptions": {
+            "t2w": t2w_series,
+            "adc": adc_series or "zero_filled_missing_adc",
+            "hbv": hbv_series,
+        },
         "summary": {
             "metadata_rows": len(rows),
-            "matching_subjects": len(seen_subjects),
+            "matching_subjects": len(subject_ids),
             "converted": len(converted),
             "failures": len(failures),
+            "adc_zero_filled_cases": sum(
+                1
+                for row in converted
+                if row["channels"]["0001"]["series_description"] == "zero_filled_missing_adc"
+            ),
             "input_dir": str(input_dir),
         },
         "converted": converted,

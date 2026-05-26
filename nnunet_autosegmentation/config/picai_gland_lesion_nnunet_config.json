@@ -1,0 +1,43 @@
+{
+  "dataset_name": "picai_gland_lesion_external_autosegmentation",
+  "picai_source": {
+    "manifest": "data/interim/picai_manifest.csv",
+    "raw_root": "data/raw/picai"
+  },
+  "external_source": {
+    "name": "PROSTATE-MRI",
+    "official_url": "https://doi.org/10.7937/K9/TCIA.2016.6046GUDv",
+    "download_dir": "nnunet_autosegmentation/data/raw/world_wide_covid",
+    "series": {
+      "t2w": "T2 TSE ax hi",
+      "adc": "",
+      "hbv": "SShDWI FAST"
+    }
+  },
+  "nnunet": {
+    "raw": "nnunet_autosegmentation/data/nnunet_raw",
+    "preprocessed": "nnunet_autosegmentation/data/nnunet_preprocessed",
+    "results": "nnunet_autosegmentation/data/nnunet_results",
+    "dataset_id": 910,
+    "dataset_label": "PI_CAIGlandLesion",
+    "dataset_dir": "nnunet_autosegmentation/data/nnunet_raw/Dataset910_PI_CAIGlandLesion",
+    "input_dir": "nnunet_autosegmentation/data/nnunet_raw/Dataset910_PI_CAIGlandLesion/imagesTs",
+    "output_dir": "nnunet_autosegmentation/data/external_predictions/prostate_mri_picai_gland_lesion",
+    "trainer": "nnUNetTrainer",
+    "configuration": "2d",
+    "folds": "0",
+    "device": "cpu"
+  },
+  "labels": {
+    "background": 0,
+    "prostate_gland": 1,
+    "cspca_lesion": 2
+  },
+  "feature_extraction": {
+    "image_dir": "nnunet_autosegmentation/data/nnunet_raw/Dataset910_PI_CAIGlandLesion/imagesTs",
+    "mask_dir": "nnunet_autosegmentation/data/external_predictions/prostate_mri_picai_gland_lesion",
+    "prostate_output_csv": "nnunet_autosegmentation/outputs/features/prostate_mri_prostate_gland_features.csv",
+    "lesion_output_csv": "nnunet_autosegmentation/outputs/features/prostate_mri_cspca_lesion_candidate_features.csv",
+    "report_json": "nnunet_autosegmentation/outputs/reports/prostate_mri_label_specific_feature_report.json"
+  }
+}

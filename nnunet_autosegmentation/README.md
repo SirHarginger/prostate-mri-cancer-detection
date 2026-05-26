@@ -21,31 +21,67 @@ Code, configs, and documentation can be committed.
 
 ## Intended Flow
 
-1. Download an external prostate MRI dataset on the cluster.
-2. Convert image data into the nnU-Net input layout.
-3. Run nnU-Net prediction using a trained prostate segmentation model.
-4. Store predicted masks under ignored data paths.
-5. Extract features using predicted masks.
-6. Keep feature outputs ignored unless a small schema/example is intentionally
-   added as documentation.
+1. Prepare PI-CAI T2W/ADC/HBV images and gland/lesion labels as
+   `Dataset910_PI_CAIGlandLesion`.
+2. Train nnU-Net on PI-CAI labels. Start with CPU-safe `2d`; use `3d_fullres`
+   later when GPU runtime is available.
+3. Convert the external PROSTATE-MRI dataset into the same three-channel
+   layout. ADC is explicitly zero-filled if unavailable and reported as such.
+4. Run prediction with the PI-CAI-trained model.
+5. Extract label-specific features for label `1` prostate gland and label `2`
+   csPCa lesion candidate. Do not merge labels with `mask > 0`.
+6. Open the QC notebook and visually inspect overlays before making claims.
 
-## Candidate External Dataset
+## PI-CAI Training Preparation
 
-PROSTATEx from TCIA is a public prostate MRI dataset suitable for external
-unsegmented-data experiments. Download it on the cluster only.
+```bash
+python nnunet_autosegmentation/scripts/prepare_picai_nnunet_training.py \
+  --config nnunet_autosegmentation/config/picai_gland_lesion_nnunet_config.json \
+  --limit 5
+```
 
-Official collection page:
+Then, on the cluster:
+
+```bash
+export nnUNet_raw="$PWD/nnunet_autosegmentation/data/nnunet_raw"
+export nnUNet_preprocessed="$PWD/nnunet_autosegmentation/data/nnunet_preprocessed"
+export nnUNet_results="$PWD/nnunet_autosegmentation/data/nnunet_results"
+
+nnUNetv2_plan_and_preprocess -d 910 --verify_dataset_integrity
+nnUNetv2_train 910 2d 0 -device cpu
+```
+
+## External Dataset
+
+The downloaded Kaggle folder used in this project is named like a COVID
+dataset, but its extracted DICOM metadata is the PROSTATE-MRI collection.
 
 ```text
-https://www.cancerimagingarchive.net/collection/prostatex/
+https://doi.org/10.7937/K9/TCIA.2016.6046GUDv
+```
+
+Prepare external inference inputs:
+
+```bash
+python nnunet_autosegmentation/scripts/prepare_nnunet_dataset.py \
+  --config nnunet_autosegmentation/config/picai_gland_lesion_nnunet_config.json
+```
+
+Predict and extract features:
+
+```bash
+bash nnunet_autosegmentation/scripts/run_nnunet_predict.sh \
+  nnunet_autosegmentation/config/picai_gland_lesion_nnunet_config.json
+
+python nnunet_autosegmentation/scripts/extract_features_from_masks.py \
+  --config nnunet_autosegmentation/config/picai_gland_lesion_nnunet_config.json
 ```
 
 ## nnU-Net Requirement
 
-nnU-Net prediction requires a trained model. This workspace assumes one of:
-
-- a trained prostate segmentation model is available, or
-- a prostate segmentation model will be trained separately using labeled data.
+nnU-Net prediction requires a trained model. The publication-grade path trains
+on PI-CAI labels first; the pretrained model downloader remains only a quick
+mechanical smoke-test path and should not be used for lesion claims.
 
 The current main classification pipeline should not depend on this workspace
 until segmentation quality is validated.
