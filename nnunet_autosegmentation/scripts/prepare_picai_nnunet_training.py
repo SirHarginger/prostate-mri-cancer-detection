@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import shutil
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,16 @@ def parse_args() -> argparse.Namespace:
         type=Path,
     )
     parser.add_argument("--limit", type=int, default=0, help="Optional case limit. Use 0 for all usable cases.")
+    parser.add_argument(
+        "--require-lesion-positive",
+        action="store_true",
+        help="For small smoke datasets, keep scanning until the requested limit of non-empty lesion cases is written.",
+    )
+    parser.add_argument(
+        "--clean-output",
+        action="store_true",
+        help="Remove existing Dataset910 output before writing. Use this for repeated smoke runs.",
+    )
     return parser.parse_args()
 
 
@@ -105,6 +116,16 @@ def write_dataset_json(dataset_dir: Path) -> None:
     (dataset_dir / "dataset.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def cleanup_case_outputs(dataset_dir: Path, case_id: str) -> None:
+    for suffix in ("0000", "0001", "0002"):
+        path = dataset_dir / "imagesTr" / f"{case_id}_{suffix}.nii.gz"
+        if path.exists():
+            path.unlink()
+    label_path = dataset_dir / "labelsTr" / f"{case_id}.nii.gz"
+    if label_path.exists():
+        label_path.unlink()
+
+
 def prepare_case(row: dict[str, str], raw_root: Path, dataset_dir: Path, sitk: Any, np: Any) -> dict[str, Any]:
     case_id = row.get("case_id", "")
     images_tr = dataset_dir / "imagesTr"
@@ -176,18 +197,37 @@ def main() -> int:
     dataset_dir = Path(config["nnunet"]["dataset_dir"])
     report_path = args.report
 
+    if args.clean_output and dataset_dir.exists():
+        shutil.rmtree(dataset_dir)
+
     rows = list(csv.DictReader(manifest_path.open(newline="", encoding="utf-8")))
     selected = sorted(rows, key=lambda row: row.get("case_id", ""))
-    if args.limit:
-        selected = selected[: args.limit]
 
-    case_reports = [prepare_case(row, raw_root, dataset_dir, sitk, np) for row in selected]
+    case_reports = []
+    attempted_rows = []
+    if args.require_lesion_positive and args.limit:
+        for row in selected:
+            attempted_rows.append(row)
+            case_report = prepare_case(row, raw_root, dataset_dir, sitk, np)
+            if case_report["written"] and not case_report["empty_lesion"]:
+                case_reports.append(case_report)
+            else:
+                cleanup_case_outputs(dataset_dir, row.get("case_id", ""))
+            if len(case_reports) >= args.limit:
+                break
+    else:
+        if args.limit:
+            selected = selected[: args.limit]
+        attempted_rows = selected
+        case_reports = [prepare_case(row, raw_root, dataset_dir, sitk, np) for row in selected]
+
     write_dataset_json(dataset_dir)
 
     issue_counts = Counter(issue for report in case_reports for issue in report["issues"])
     summary = {
         "manifest_rows": len(rows),
-        "selected_cases": len(selected),
+        "attempted_cases": len(attempted_rows),
+        "selected_cases": len(case_reports),
         "written_cases": sum(1 for report in case_reports if report["written"]),
         "failed_or_skipped_cases": sum(1 for report in case_reports if not report["written"]),
         "empty_gland_cases": sum(1 for report in case_reports if report["empty_gland"]),
