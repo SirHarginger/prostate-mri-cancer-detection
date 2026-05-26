@@ -159,12 +159,11 @@ class NnUNetTrainingArtifactTests(unittest.TestCase):
         source = installer.trainer_source("nnUNetTrainer_50epochs", 50)
 
         self.assertIn("class nnUNetTrainer_50epochs(nnUNetTrainer):", source)
-        self.assertIn("plans: dict", source)
-        self.assertIn("configuration: str", source)
-        self.assertIn("base_signature = inspect.signature", source)
-        self.assertIn("super().__init__(**super_kwargs)", source)
+        self.assertIn("def initialize(self):", source)
         self.assertNotIn("*args", source)
+        self.assertNotIn("__init__", source)
         self.assertIn("self.num_epochs = 50", source)
+        self.assertIn("return super().initialize()", source)
         compile(source, "nnUNetTrainer_50epochs.py", "exec")
 
 
