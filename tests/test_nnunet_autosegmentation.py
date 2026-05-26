@@ -166,6 +166,12 @@ class NnUNetTrainingArtifactTests(unittest.TestCase):
         self.assertIn("return super().initialize()", source)
         compile(source, "nnUNetTrainer_50epochs.py", "exec")
 
+    def test_pyradiomics_feature_name_cleaning_and_scalar_conversion(self) -> None:
+        extractor = load_script("extract_pyradiomics_features.py")
+
+        self.assertEqual(extractor.clean_feature_name("original_glcm-JointEntropy"), "glcm_JointEntropy")
+        self.assertEqual(extractor.scalar_value(3.5), 3.5)
+
 
 def image_from_array(array):
     image = sitk.GetImageFromArray(array)

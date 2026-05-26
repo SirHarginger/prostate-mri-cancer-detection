@@ -76,6 +76,9 @@ bash nnunet_autosegmentation/scripts/run_nnunet_predict.sh \
 
 python nnunet_autosegmentation/scripts/extract_features_from_masks.py \
   --config nnunet_autosegmentation/config/picai_gland_lesion_nnunet_config.json
+
+python nnunet_autosegmentation/scripts/extract_pyradiomics_features.py \
+  --config nnunet_autosegmentation/config/picai_gland_lesion_nnunet_config.json
 ```
 
 ## nnU-Net Requirement

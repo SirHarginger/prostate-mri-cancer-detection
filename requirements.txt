@@ -2,3 +2,4 @@ numpy
 SimpleITK
 scikit-learn
 torch
+pyradiomics
