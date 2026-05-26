@@ -23,6 +23,8 @@ def parse_args() -> argparse.Namespace:
 def trainer_source(class_name: str, epochs: int) -> str:
     return f'''"""Custom fixed-length trainer installed by the prostate MRI project."""
 
+import inspect
+
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
 
 
@@ -38,14 +40,21 @@ class {class_name}(nnUNetTrainer):
         unpack_dataset: bool = True,
         device=None,
     ):
-        super().__init__(
-            plans=plans,
-            configuration=configuration,
-            fold=fold,
-            dataset_json=dataset_json,
-            unpack_dataset=unpack_dataset,
-            device=device,
-        )
+        base_signature = inspect.signature(nnUNetTrainer.__init__)
+        kwargs = {{
+            "plans": plans,
+            "configuration": configuration,
+            "fold": fold,
+            "dataset_json": dataset_json,
+            "unpack_dataset": unpack_dataset,
+            "device": device,
+        }}
+        super_kwargs = {{
+            key: value
+            for key, value in kwargs.items()
+            if key in base_signature.parameters
+        }}
+        super().__init__(**super_kwargs)
         self.num_epochs = {epochs}
 '''
 
