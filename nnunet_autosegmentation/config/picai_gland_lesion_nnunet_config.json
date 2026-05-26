@@ -23,7 +23,7 @@
     "dataset_dir": "nnunet_autosegmentation/data/nnunet_raw/Dataset910_PI_CAIGlandLesion",
     "input_dir": "nnunet_autosegmentation/data/nnunet_raw/Dataset910_PI_CAIGlandLesion/imagesTs",
     "output_dir": "nnunet_autosegmentation/data/external_predictions/prostate_mri_picai_gland_lesion",
-    "trainer": "nnUNetTrainer",
+    "trainer": "nnUNetTrainer_50epochs",
     "configuration": "2d",
     "folds": "0",
     "device": "cpu"

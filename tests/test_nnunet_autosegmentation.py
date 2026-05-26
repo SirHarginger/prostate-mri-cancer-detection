@@ -122,6 +122,47 @@ class NnUNetAutosegmentationTests(unittest.TestCase):
         self.assertEqual(lesion["voxel_count"], 0)
 
 
+class NnUNetTrainingArtifactTests(unittest.TestCase):
+    def test_parses_nnunet_training_log_metrics(self) -> None:
+        collect = load_script("collect_nnunet_training_artifacts.py")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "training_log.txt"
+            log_path.write_text(
+                "\n".join(
+                    [
+                        "2026-05-26 09:40:34.268577: Epoch 0",
+                        "2026-05-26 09:40:34.268982: Current learning rate: 0.01",
+                        "2026-05-26 10:07:30.445849: train_loss -0.1758",
+                        "2026-05-26 10:07:30.446384: val_loss -0.1183",
+                        "2026-05-26 10:07:30.446706: Pseudo dice [np.float32(0.6391), np.float32(0.0)]",
+                        "2026-05-26 10:07:30.446912: Epoch time: 1616.19 s",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            rows = collect.parse_training_log(log_path)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["epoch"], 0)
+        self.assertEqual(rows[0]["learning_rate"], 0.01)
+        self.assertEqual(rows[0]["train_loss"], -0.1758)
+        self.assertEqual(rows[0]["val_loss"], -0.1183)
+        self.assertEqual(rows[0]["pseudo_dice_prostate_gland"], 0.6391)
+        self.assertEqual(rows[0]["pseudo_dice_cspca_lesion"], 0.0)
+        self.assertEqual(rows[0]["epoch_time_seconds"], 1616.19)
+
+    def test_custom_trainer_source_sets_epoch_count(self) -> None:
+        installer = load_script("install_custom_nnunet_trainers.py")
+
+        source = installer.trainer_source("nnUNetTrainer_50epochs", 50)
+
+        self.assertIn("class nnUNetTrainer_50epochs(nnUNetTrainer):", source)
+        self.assertIn("self.num_epochs = 50", source)
+        compile(source, "nnUNetTrainer_50epochs.py", "exec")
+
+
 def image_from_array(array):
     image = sitk.GetImageFromArray(array)
     image.SetSpacing((0.5, 0.5, 3.0))

@@ -47,8 +47,9 @@ export nnUNet_raw="$PWD/nnunet_autosegmentation/data/nnunet_raw"
 export nnUNet_preprocessed="$PWD/nnunet_autosegmentation/data/nnunet_preprocessed"
 export nnUNet_results="$PWD/nnunet_autosegmentation/data/nnunet_results"
 
+python nnunet_autosegmentation/scripts/install_custom_nnunet_trainers.py --epochs 50
 nnUNetv2_plan_and_preprocess -d 910 --verify_dataset_integrity
-nnUNetv2_train 910 2d 0 -device cpu
+nnUNetv2_train 910 2d 0 -tr nnUNetTrainer_50epochs -device cpu
 ```
 
 ## External Dataset
