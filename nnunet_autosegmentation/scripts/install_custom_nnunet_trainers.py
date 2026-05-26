@@ -29,8 +29,23 @@ from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
 class {class_name}(nnUNetTrainer):
     """nnU-Net trainer capped at {epochs} epochs for CPU smoke training."""
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        plans: dict,
+        configuration: str,
+        fold: int,
+        dataset_json: dict,
+        unpack_dataset: bool = True,
+        device=None,
+    ):
+        super().__init__(
+            plans=plans,
+            configuration=configuration,
+            fold=fold,
+            dataset_json=dataset_json,
+            unpack_dataset=unpack_dataset,
+            device=device,
+        )
         self.num_epochs = {epochs}
 '''
 
